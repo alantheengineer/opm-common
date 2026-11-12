@@ -1,0 +1,92 @@
+name: deploy-ci
+
+on:
+  pull_request:
+    branches: [deploy]
+  push:
+    branches: [deploy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 2G
+  # Tests rebuilt and run under the sanitizers.
+  SANITIZER_TESTS: test_SaltArray test_SaltElectrolytes
+
+jobs:
+  format:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-format-18
+      - run: .github/scripts/check-format.sh "origin/${{ github.base_ref }}"
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && xargs -a .github/apt-packages.txt sudo apt-get install -y --no-install-recommends
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-build-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-build-
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DOPM_ENABLE_PYTHON=OFF
+          -DBUILD_TESTING=ON
+      - name: Strict warnings on changed sources
+        if: github.event_name == 'pull_request'
+        run: .github/scripts/check-warnings.sh build "origin/${{ github.base_ref }}"
+      - run: cmake --build build --parallel 4
+      - run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 900
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && xargs -a .github/apt-packages.txt sudo apt-get install -y --no-install-recommends
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-sanitizers-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-sanitizers-
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DOPM_ENABLE_PYTHON=OFF
+          -DBUILD_TESTING=ON
+      - name: Build
+        run: |
+          read -ra targets <<< "$SANITIZER_TESTS"
+          cmake --build build --parallel 4 --target "${targets[@]}"
+      - name: Test
+        run: |
+          pattern=$(echo "$SANITIZER_TESTS" | sed 's/test_//g; s/ /|/g')
+          ctest --test-dir build --output-on-failure --timeout 900 -R "^($pattern)\$"
