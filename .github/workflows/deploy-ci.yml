@@ -52,10 +52,11 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DOPM_ENABLE_PYTHON=OFF
           -DBUILD_TESTING=ON
+      - run: cmake --build build --parallel 4
+      # After the build, which generates the ParserKeywords headers.
       - name: Strict warnings on changed sources
         if: github.event_name == 'pull_request'
         run: .github/scripts/check-warnings.sh build "origin/${{ github.base_ref }}"
-      - run: cmake --build build --parallel 4
       - run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 900
 
   sanitizers:
