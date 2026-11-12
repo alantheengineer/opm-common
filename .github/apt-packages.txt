@@ -9,3 +9,4 @@ libboost-date-time-dev
 libboost-program-options-dev
 libfmt-dev
 libcjson-dev
+libdune-common-dev
