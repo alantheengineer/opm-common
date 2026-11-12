@@ -65,6 +65,7 @@
 #include <opm/input/eclipse/Schedule/Well/WELDRAW.hpp>
 #include <opm/input/eclipse/Schedule/Well/WVFPEXP.hpp>
 #include <opm/input/eclipse/Schedule/Well/Well.hpp>
+#include <opm/input/eclipse/Schedule/Well/WellBrineProperties.hpp>
 #include <opm/input/eclipse/Schedule/Well/WellConnections.hpp>
 #include <opm/input/eclipse/Schedule/Well/WellFoamProperties.hpp>
 #include <opm/input/eclipse/Schedule/Well/WellFractureSeeds.hpp>
@@ -8778,4 +8779,136 @@ WCONINJH
     BOOST_CHECK( schedule[9].wellgroup_events().hasEvent("I1", ScheduleEvents::WELL_THP_UPDATE));
     // WCONINJH re-specifies the VFP table
     BOOST_CHECK( schedule[10].wellgroup_events().hasEvent("I1", ScheduleEvents::WELL_THP_UPDATE));
+}
+
+namespace
+{
+
+std::vector<std::unique_ptr<DeckKeyword>>
+parseScheduleKeywords(const std::string& text)
+{
+    auto deck = Parser {}.parseString("METRIC\n\n" + text);
+    std::vector<std::unique_ptr<DeckKeyword>> keywords;
+    for (std::size_t i = 1; i < deck.size(); ++i) {
+        keywords.push_back(std::make_unique<DeckKeyword>(deck[i]));
+    }
+    return keywords;
+}
+
+} // Anonymous namespace
+
+BOOST_AUTO_TEST_CASE(InsertKeywordsAtReportStep)
+{
+    const auto input = std::string {R"(
+RUNSPEC
+OIL
+WATER
+GAS
+START
+1 'JAN' 2026 /
+GRID
+PORO
+    1000*0.1 /
+PERMX
+    1000*1 /
+PERMY
+    1000*1 /
+PERMZ
+    1000*0.1 /
+SCHEDULE
+WELSPECS
+ 'PROD' 'G1' 1 1 1* 'OIL' /
+ 'INJ'  'G1' 10 10 1* 'WATER' /
+/
+COMPDAT
+ 'PROD' 1 1 1 1 'OPEN' 1* 1.0 /
+ 'INJ' 10 10 1 1 'OPEN' 1* 1.0 /
+/
+WCONPROD
+ 'PROD' 'OPEN' 'ORAT' 1000 4* 100 /
+/
+WCONINJE
+ 'INJ' 'WATER' 'OPEN' 'RATE' 500 1* 400 /
+/
+TSTEP
+ 3*10 /
+)"};
+
+    auto schedule = make_schedule(input);
+    const double rate = unit::cubic(unit::meter) / unit::day;
+
+    // WSALT is not allowed from PYACTION, but is accepted here.
+    const auto keywords = parseScheduleKeywords(R"(
+WCONPROD
+ 'PROD' 'OPEN' 'ORAT' 600 4* 100 /
+/
+WSALT
+ 'INJ' 12.5 /
+/
+)");
+    schedule.insertKeywords(keywords, 1);
+
+    const auto oilRate = [&schedule](std::size_t step) {
+        return schedule.getWell("PROD", step).getProductionProperties().OilRate.getSI();
+    };
+    BOOST_CHECK_CLOSE(oilRate(0), 1000 * rate, 1e-12);
+    BOOST_CHECK_CLOSE(oilRate(1), 600 * rate, 1e-12);
+    BOOST_CHECK_CLOSE(oilRate(3), 600 * rate, 1e-12);
+
+    const auto salt = [&schedule](std::size_t step) {
+        return schedule.getWell("INJ", step).getBrineProperties().m_saltConcentration;
+    };
+    BOOST_CHECK_EQUAL(salt(0), 0.0);
+    BOOST_CHECK_CLOSE(salt(1), 12.5, 1e-12);
+    BOOST_CHECK_CLOSE(salt(2), 12.5, 1e-12);
+
+    // A later insertion overrides what the earlier one carried forward.
+    schedule.insertKeywords(parseScheduleKeywords("WSALT\n 'INJ' 3.0 /\n/\n"), 2);
+    BOOST_CHECK_CLOSE(salt(1), 12.5, 1e-12);
+    BOOST_CHECK_CLOSE(salt(2), 3.0, 1e-12);
+    BOOST_CHECK_CLOSE(oilRate(2), 600 * rate, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(InsertKeywordsReportsErrors)
+{
+    const auto input = std::string {R"(
+RUNSPEC
+OIL
+WATER
+GAS
+START
+1 'JAN' 2026 /
+GRID
+PORO
+    1000*0.1 /
+PERMX
+    1000*1 /
+PERMY
+    1000*1 /
+PERMZ
+    1000*0.1 /
+SCHEDULE
+WELSPECS
+ 'PROD' 'G1' 1 1 1* 'OIL' /
+/
+COMPDAT
+ 'PROD' 1 1 1 1 'OPEN' 1* 1.0 /
+/
+WCONPROD
+ 'PROD' 'OPEN' 'ORAT' 1000 4* 100 /
+/
+TSTEP
+ 2*10 /
+)"};
+
+    auto schedule = make_schedule(input);
+    const auto unknownWell = parseScheduleKeywords("WELOPEN\n 'NOSUCHWELL' 'SHUT' /\n/\n");
+    BOOST_CHECK_THROW(schedule.insertKeywords(unknownWell, 1), std::exception);
+
+    const auto shut = parseScheduleKeywords("WELOPEN\n 'PROD' 'SHUT' /\n/\n");
+    BOOST_CHECK_THROW(schedule.insertKeywords(shut, 7), std::invalid_argument);
+
+    schedule.insertKeywords(shut, 1);
+    BOOST_CHECK(schedule.getWell("PROD", 0).getStatus() == Well::Status::OPEN);
+    BOOST_CHECK(schedule.getWell("PROD", 1).getStatus() == Well::Status::SHUT);
 }

@@ -459,6 +459,14 @@ namespace Opm {
         void applyKeywords(std::vector<std::unique_ptr<DeckKeyword>>& keywords, std::unordered_map<std::string, double>& target_wellpi, bool action_mode, std::size_t report_step);
         void applyKeywords(std::vector<std::unique_ptr<DeckKeyword>>& keywords, std::unordered_map<std::string, double>& target_wellpi, bool action_mode);
 
+        /// Inserts keywords at the start of a report step, as if they were
+        /// written there in the deck, and updates the later report steps.
+        /// Unlike applyKeywords() any SCHEDULE keyword is accepted, so the
+        /// caller decides which to allow. Throws std::invalid_argument if a
+        /// keyword cannot be applied or the report step is out of range.
+        SimulatorUpdate insertKeywords(const std::vector<std::unique_ptr<DeckKeyword>>& keywords,
+                                       std::size_t report_step);
+
         template<class Serializer>
         void serializeOp(Serializer& serializer)
         {
@@ -644,6 +652,11 @@ namespace Opm {
         bool isWList(std::size_t report_step, const std::string& pattern) const;
 
         SimulatorUpdate applyAction(std::size_t reportStep, const std::string& action_name, const std::vector<std::string>& matching_wells);
+        SimulatorUpdate insertKeywords_(const std::vector<std::unique_ptr<DeckKeyword>>& keywords,
+                                        std::unordered_map<std::string, double>& target_wellpi,
+                                        bool action_mode,
+                                        std::size_t reportStep,
+                                        bool pyActionKeywordsOnly);
     };
 }
 

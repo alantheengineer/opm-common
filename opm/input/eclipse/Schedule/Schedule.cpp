@@ -1861,6 +1861,30 @@ File {} line {}.)", pattern, location.keyword, location.filename, location.linen
     void Schedule::applyKeywords(std::vector<std::unique_ptr<DeckKeyword>>& keywords, std::unordered_map<std::string, double>& target_wellpi,
                                  bool action_mode, const std::size_t reportStep)
     {
+        const auto sim_update
+            = this->insertKeywords_(keywords, target_wellpi, action_mode, reportStep, true);
+        if (reportStep < this->m_sched_deck.size() - 1) {
+            this->simUpdateFromPython->delayed_iteration = SimulatorUpdate::DelayedIteration::Off;
+        }
+
+        this->simUpdateFromPython->append(sim_update);
+    }
+
+    SimulatorUpdate
+    Schedule::insertKeywords(const std::vector<std::unique_ptr<DeckKeyword>>& keywords,
+                             const std::size_t reportStep)
+    {
+        std::unordered_map<std::string, double> target_wellpi;
+        return this->insertKeywords_(keywords, target_wellpi, false, reportStep, false);
+    }
+
+    SimulatorUpdate
+    Schedule::insertKeywords_(const std::vector<std::unique_ptr<DeckKeyword>>& keywords,
+                              std::unordered_map<std::string, double>& target_wellpi,
+                              const bool action_mode,
+                              const std::size_t reportStep,
+                              const bool pyActionKeywordsOnly)
+    {
         if (reportStep < this->current_report_step) {
             throw std::invalid_argument {
                 fmt::format("Insert keyword for past report step {} "
@@ -1892,7 +1916,8 @@ File {} line {}.)", pattern, location.keyword, location.filename, location.linen
                               prefix, this->m_sched_deck.location());
 
         for (const auto& keyword : keywords) {
-            const auto valid = Action::PyAction::valid_keyword(keyword->name());
+            const auto valid
+                = !pyActionKeywordsOnly || Action::PyAction::valid_keyword(keyword->name());
 
             if (valid || this->m_lowActionParsingStrictness) {
                 if (!valid) {
@@ -1942,11 +1967,17 @@ File {} line {}.)", pattern, location.keyword, location.filename, location.linen
                                          prefix,
                                          /* keepKeywords = */ true,
                                          /* log_to_debug = */ true);
-            this->simUpdateFromPython->delayed_iteration =
-                SimulatorUpdate::DelayedIteration::Off;
         }
 
-        this->simUpdateFromPython->append(sim_update);
+        // The guard ends the program if it still holds errors when it goes
+        // out of scope. insertKeywords() reports them to its caller instead.
+        if (!pyActionKeywordsOnly && errors) {
+            const auto message = errors.formattedErrors();
+            errors.clear();
+            throw std::invalid_argument(message);
+        }
+
+        return sim_update;
     }
 
     namespace {
