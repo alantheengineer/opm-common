@@ -20,9 +20,11 @@ env:
   # Tests rebuilt and run under the sanitizers.
   SANITIZER_TESTS: test_SaltArray test_SaltElectrolytes
 
+# Pull requests from sync/ branches bring in OPM's code, which these style
+# checks were not written for, so they skip them and keep the build and tests.
 jobs:
   format:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'sync/')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +57,7 @@ jobs:
       - run: cmake --build build --parallel 4
       # After the build, which generates the ParserKeywords headers.
       - name: Strict warnings on changed sources
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'sync/')
         run: .github/scripts/check-warnings.sh build "origin/${{ github.base_ref }}"
       - run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 900
 
