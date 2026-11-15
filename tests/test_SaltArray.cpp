@@ -23,6 +23,11 @@
 #include <opm/common/utility/Serializer.hpp>
 #include <opm/material/densead/Evaluation.hpp>
 
+#include <array>
+#include <string>
+#include <tuple>
+#include <vector>
+
 #define BOOST_TEST_MODULE SaltArrayTests
 #include <boost/mpl/list.hpp>
 #include <boost/test/unit_test.hpp>
@@ -321,4 +326,37 @@ BOOST_AUTO_TEST_CASE(SerializationTests)
     ShorterSaltArray newer {in.size() + 1, 0.01};
     ser.pack(newer);
     BOOST_CHECK_THROW(ser.unpack(out), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(IonTableTests)
+{
+    // Charges, names and categories of the ions added after SO4
+    const std::array<std::tuple<std::string, SaltIndex, short, IonType>, 6> ions = {{
+        {"LI", SaltIndex::LI, 1, IonType::Cation},
+        {"SR", SaltIndex::SR, 2, IonType::Cation},
+        {"BR", SaltIndex::BR, -1, IonType::Anion},
+        {"HCO3", SaltIndex::HCO3, -1, IonType::Anion},
+        {"CO3", SaltIndex::CO3, -2, IonType::Anion},
+        {"B", SaltIndex::B, 0, IonType::Neutral},
+    }};
+    for (const auto& [name, index, charge, type] : ions) {
+        BOOST_CHECK(saltIndexFromString(name) == index);
+        BOOST_CHECK_EQUAL(ionStrength(index), charge);
+        BOOST_CHECK(categorizeIon(index) == type);
+        BOOST_CHECK(saltMolarMass<double>(index) > 0.0);
+    }
+    BOOST_CHECK_EQUAL(numSaltIons, 12U);
+
+    // Equal charges keep SaltIndex order; boron is in neither list
+    SaltArray<double, SaltMolality> molal;
+    for (std::size_t i = 0; i < molal.size(); ++i) {
+        molal[static_cast<SaltIndex>(i)] = 1.0;
+    }
+    const auto [cations, anions] = molal.cations_and_anions();
+    const std::vector<SaltIndex> expectedCations = {SaltIndex::CA, SaltIndex::MG, SaltIndex::SR,
+                                                    SaltIndex::NA, SaltIndex::K, SaltIndex::LI};
+    const std::vector<SaltIndex> expectedAnions = {SaltIndex::SO4, SaltIndex::CO3, SaltIndex::CL,
+                                                   SaltIndex::BR, SaltIndex::HCO3};
+    BOOST_CHECK(std::vector<SaltIndex>(cations.begin(), cations.end()) == expectedCations);
+    BOOST_CHECK(std::vector<SaltIndex>(anions.begin(), anions.end()) == expectedAnions);
 }

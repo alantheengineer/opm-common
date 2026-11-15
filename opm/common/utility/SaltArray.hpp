@@ -26,12 +26,18 @@
 #include <opm/common/utility/FixedCapacityList.hpp>
 #include <opm/common/utility/gpuDecorators.hpp>
 
+#include <opm/material/components/BOH3.hpp>
+#include <opm/material/components/BrIon.hpp>
+#include <opm/material/components/CO3Ion.hpp>
 #include <opm/material/components/CaIon.hpp>
 #include <opm/material/components/ClIon.hpp>
+#include <opm/material/components/HCO3Ion.hpp>
 #include <opm/material/components/KIon.hpp>
+#include <opm/material/components/LiIon.hpp>
 #include <opm/material/components/MgIon.hpp>
 #include <opm/material/components/NaIon.hpp>
 #include <opm/material/components/SO4Ion.hpp>
+#include <opm/material/components/SrIon.hpp>
 
 #include <array>
 #include <cassert>
@@ -59,10 +65,11 @@ template <class FromSaltUnit, class ToSaltUnit>
 struct SaltUnitConverter;
 
 /// Salt ion indices for SaltArray. New ions go at the end so that serialized arrays keep
-/// their meaning.
+/// their meaning. B is total dissolved boron, carried as B(OH)3.
 enum class SaltIndex : std::size_t
 {
     NA, K, CA, MG, CL, SO4,
+    LI, SR, BR, HCO3, CO3, B,
     NCOMP // DO NOT CHANGE! Must be the last enum to set size of SaltArray!
 };
 
@@ -75,10 +82,10 @@ inline constexpr short maxIonCharge = 2;
 /// Salt ion indices held without heap allocation
 using SaltIndexList = FixedCapacityList<SaltIndex, numSaltIons>;
 
-/// Enum for classifying cations and anions
+/// Enum for classifying cations, anions and neutral solutes
 enum class IonType
 {
-    Cation, Anion
+    Cation, Anion, Neutral
 };
 
 /*!
@@ -108,6 +115,24 @@ saltIndexFromString(const std::string& s)
     if (s == "SO4") {
         return SaltIndex::SO4;
     }
+    if (s == "LI") {
+        return SaltIndex::LI;
+    }
+    if (s == "SR") {
+        return SaltIndex::SR;
+    }
+    if (s == "BR") {
+        return SaltIndex::BR;
+    }
+    if (s == "HCO3") {
+        return SaltIndex::HCO3;
+    }
+    if (s == "CO3") {
+        return SaltIndex::CO3;
+    }
+    if (s == "B") {
+        return SaltIndex::B;
+    }
     throw std::invalid_argument("SaltIndex not valid!");
 }
 
@@ -125,10 +150,17 @@ categorizeIon(const SaltIndex s)
     case SaltIndex::NA:
     case SaltIndex::MG:
     case SaltIndex::K:
+    case SaltIndex::LI:
+    case SaltIndex::SR:
         return IonType::Cation;
     case SaltIndex::CL:
     case SaltIndex::SO4:
+    case SaltIndex::BR:
+    case SaltIndex::HCO3:
+    case SaltIndex::CO3:
         return IonType::Anion;
+    case SaltIndex::B:
+        return IonType::Neutral;
     default:
         throw std::runtime_error("Unknown SaltIndex");
     }
@@ -156,6 +188,18 @@ ionStrength(const SaltIndex s)
         return -1;
     case SaltIndex::SO4:
         return -2;
+    case SaltIndex::LI:
+        return 1;
+    case SaltIndex::SR:
+        return 2;
+    case SaltIndex::BR:
+        return -1;
+    case SaltIndex::HCO3:
+        return -1;
+    case SaltIndex::CO3:
+        return -2;
+    case SaltIndex::B:
+        return 0;
     default:
         throw std::runtime_error("Unknown SaltIndex");
     }
@@ -184,6 +228,18 @@ saltMolarMass(const SaltIndex ind)
         return MgIon<Scalar>::molarMass();
     case SaltIndex::SO4:
         return SO4Ion<Scalar>::molarMass();
+    case SaltIndex::LI:
+        return LiIon<Scalar>::molarMass();
+    case SaltIndex::SR:
+        return SrIon<Scalar>::molarMass();
+    case SaltIndex::BR:
+        return BrIon<Scalar>::molarMass();
+    case SaltIndex::HCO3:
+        return HCO3Ion<Scalar>::molarMass();
+    case SaltIndex::CO3:
+        return CO3Ion<Scalar>::molarMass();
+    case SaltIndex::B:
+        return BOH3<Scalar>::molarMass();
     default:
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
         assert(false && "SaltIndex not valid!");
@@ -240,7 +296,7 @@ public:
      */
     void assignFromDeckRecord(const DeckRecord& record)
     {
-        assert(record.size() == saltData_.size());
+        assert(record.size() <= saltData_.size());
         for (const auto& item : record) {
             auto recItem = static_cast<T>(item.get<double>(0));
             auto index = saltIndexFromString(item.name());
@@ -395,7 +451,8 @@ public:
 
     /*!
      * Get cations and anions of non-zero ions, cations by falling charge and anions by
-     * rising charge. Ions of equal charge keep their SaltIndex order.
+     * rising charge. Ions of equal charge keep their SaltIndex order. Neutral solutes are
+     * in neither list.
      *
      * @return Pair of cation and anion lists
      */

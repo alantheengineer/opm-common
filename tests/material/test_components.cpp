@@ -40,6 +40,7 @@
 #endif
 
 #include <opm/common/utility/SaltArray.hpp>
+#include <opm/common/utility/SaltElectrolytes.hpp>
 #include <opm/common/utility/String.hpp>
 
 #include <opm/material/densead/Evaluation.hpp>
@@ -79,7 +80,10 @@
 #include <opm/json/JsonObject.hpp>
 
 #include <array>
+#include <filesystem>
 #include <ranges>
+#include <string>
+#include <type_traits>
 #include <utility>
 
 #include <fmt/format.h>
@@ -156,6 +160,23 @@ void addSaltMassFraction(Opm::SaltArray<Evaluation, Opm::SaltMassFraction>& salt
         saltArray[Opm::SaltIndex::SO4] += S * SO4Ion::molarMass() / mmMgSO4;
     } else {
         throw std::invalid_argument("addSaltMassFraction: unknown salt '" + salt + "'");
+    }
+}
+
+template <class Electrolyte>
+std::string electrolyteName(const Electrolyte e)
+{
+    switch (e) {
+    case Electrolyte::LiCl: return "LiCl";
+    case Electrolyte::Li2SO4: return "Li2SO4";
+    case Electrolyte::SrCl2: return "SrCl2";
+    case Electrolyte::NaBr: return "NaBr";
+    case Electrolyte::KBr: return "KBr";
+    case Electrolyte::NaHCO3: return "NaHCO3";
+    case Electrolyte::Na2CO3: return "Na2CO3";
+    case Electrolyte::KHCO3: return "KHCO3";
+    case Electrolyte::K2CO3: return "K2CO3";
+    default: return "";
     }
 }
 
@@ -971,6 +992,51 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMgSO4Density, Scalar, Types)
         const Scalar dens = BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value();
         BOOST_CHECK_MESSAGE(close_at_tolerance(dens, ref, Scalar(5e-4)),
                             "MgSO4 density " << dens << " against " << ref << " at w = " << w);
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009Electrolytes, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::SimpleHuDuanH2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+
+    // Reference values from the thermo package, written by laliberte_2009_reference.py
+    const std::filesystem::path file("material/ref_data_laliberte_2009.json");
+    const Json::JsonObject reference(file);
+    const Scalar tol = std::is_same_v<Scalar, float> ? 2e-4 : 1e-9;
+
+    for (const auto& pairing : Electrolytes::pairings) {
+        const auto e = static_cast<std::size_t>(pairing.electrolyte);
+        if (e < static_cast<std::size_t>(Electrolytes::Electrolyte::LiCl)) {
+            continue; // the first seven use the 2004 and 2007 coefficient sets
+        }
+        const std::string name = electrolyteName(pairing.electrolyte);
+        const Json::JsonObject data = reference.get_item(name);
+        const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
+        const Scalar cationShare =
+            pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
+
+        for (const std::string prop : {"density", "viscosity"}) {
+            const Json::JsonObject points = data.get_item(prop);
+            for (std::size_t i = 0; i < points.size(); ++i) {
+                const Json::JsonObject point = points.get_array_item(i);
+                const Evaluation T(point.get_array_item(0).as_double());
+                const Scalar w = point.get_array_item(1).as_double();
+                const Scalar ref = point.get_array_item(2).as_double();
+
+                Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
+                saltArray[pairing.cation] = w * cationShare;
+                saltArray[pairing.anion] = w * (1 - cationShare);
+                const Evaluation p(101325.0);
+                const Scalar value = prop == "density"
+                    ? BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value()
+                    : BrineDyn::liquidViscosityMulticompSalt(T, saltArray).value();
+                BOOST_CHECK_MESSAGE(close_at_tolerance(value, ref, tol),
+                                    name << " " << prop << " " << value << " against " << ref
+                                         << " at T = " << T.value() << ", w = " << w);
+            }
+        }
     }
 }
 

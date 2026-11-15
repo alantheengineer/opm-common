@@ -24,16 +24,10 @@
 #include <opm/common/utility/SaltArray.hpp>
 
 #include <opm/material/common/MathToolbox.hpp>
-#include <opm/material/components/CaIon.hpp>
-#include <opm/material/components/ClIon.hpp>
-#include <opm/material/components/KIon.hpp>
-#include <opm/material/components/MgIon.hpp>
-#include <opm/material/components/NaIon.hpp>
-#include <opm/material/components/SO4Ion.hpp>
 
+#include <array>
 #include <cstddef>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 
 namespace Opm
@@ -54,6 +48,7 @@ public:
     enum class Electrolyte
     {
         CaCl2, KCl, K2SO4, MgCl2, MgSO4, NaCl, Na2SO4,
+        LiCl, Li2SO4, SrCl2, NaBr, KBr, NaHCO3, Na2CO3, KHCO3, K2CO3,
         NUM // Must be last: the number of electrolytes
     };
 
@@ -64,6 +59,46 @@ public:
     template <class Evaluation>
     using ElectrolyteList = FixedCapacityList<std::pair<Electrolyte, Evaluation>, numElectrolytes>;
 
+    /// An electrolyte and the moles of cation and anion in one mole of it
+    struct Pairing
+    {
+        Electrolyte electrolyte;
+        SaltIndex cation;
+        Scalar cationsPer;
+        SaltIndex anion;
+        Scalar anionsPer;
+    };
+
+    /// Every supported cation-anion pair, in Electrolyte order
+    static constexpr std::array<Pairing, numElectrolytes> pairings = {{
+        {Electrolyte::CaCl2, SaltIndex::CA, 1, SaltIndex::CL, 2},
+        {Electrolyte::KCl, SaltIndex::K, 1, SaltIndex::CL, 1},
+        {Electrolyte::K2SO4, SaltIndex::K, 2, SaltIndex::SO4, 1},
+        {Electrolyte::MgCl2, SaltIndex::MG, 1, SaltIndex::CL, 2},
+        {Electrolyte::MgSO4, SaltIndex::MG, 1, SaltIndex::SO4, 1},
+        {Electrolyte::NaCl, SaltIndex::NA, 1, SaltIndex::CL, 1},
+        {Electrolyte::Na2SO4, SaltIndex::NA, 2, SaltIndex::SO4, 1},
+        {Electrolyte::LiCl, SaltIndex::LI, 1, SaltIndex::CL, 1},
+        {Electrolyte::Li2SO4, SaltIndex::LI, 2, SaltIndex::SO4, 1},
+        {Electrolyte::SrCl2, SaltIndex::SR, 1, SaltIndex::CL, 2},
+        {Electrolyte::NaBr, SaltIndex::NA, 1, SaltIndex::BR, 1},
+        {Electrolyte::KBr, SaltIndex::K, 1, SaltIndex::BR, 1},
+        {Electrolyte::NaHCO3, SaltIndex::NA, 1, SaltIndex::HCO3, 1},
+        {Electrolyte::Na2CO3, SaltIndex::NA, 2, SaltIndex::CO3, 1},
+        {Electrolyte::KHCO3, SaltIndex::K, 1, SaltIndex::HCO3, 1},
+        {Electrolyte::K2CO3, SaltIndex::K, 2, SaltIndex::CO3, 1},
+    }};
+
+    static constexpr bool pairingsInElectrolyteOrder()
+    {
+        for (std::size_t i = 0; i < numElectrolytes; ++i) {
+            if (pairings[i].electrolyte != static_cast<Electrolyte>(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /*!
      * Molar mass of electrolyte
      *
@@ -72,24 +107,10 @@ public:
      */
     static Scalar molarMass(const Electrolyte e)
     {
-        switch (e) {
-        case Electrolyte::CaCl2:
-            return CaIon<Scalar>::molarMass() + 2.0 * ClIon<Scalar>::molarMass();
-        case Electrolyte::KCl:
-            return KIon<Scalar>::molarMass() + ClIon<Scalar>::molarMass();
-        case Electrolyte::K2SO4:
-            return 2.0 * KIon<Scalar>::molarMass() + SO4Ion<Scalar>::molarMass();
-        case Electrolyte::MgCl2:
-            return MgIon<Scalar>::molarMass() + 2.0 * ClIon<Scalar>::molarMass();
-        case Electrolyte::MgSO4:
-            return MgIon<Scalar>::molarMass() + SO4Ion<Scalar>::molarMass();
-        case Electrolyte::NaCl:
-            return NaIon<Scalar>::molarMass() + ClIon<Scalar>::molarMass();
-        case Electrolyte::Na2SO4:
-            return 2.0 * NaIon<Scalar>::molarMass() + SO4Ion<Scalar>::molarMass();
-        default:
-            throw std::runtime_error("Unknown Electrolyte!");
-        }
+        static_assert(pairingsInElectrolyteOrder(), "pairings must follow Electrolyte order");
+        const auto& p = pairings[static_cast<std::size_t>(e)];
+        return p.cationsPer * saltMolarMass<Scalar>(p.cation)
+            + p.anionsPer * saltMolarMass<Scalar>(p.anion);
     }
 
     /*!
@@ -193,58 +214,16 @@ private:
                                   const SaltIndex anionIdx,
                                   Evaluation& anion)
     {
-        // NOTE: All comments describe unit molal conversion between electrolyte and ions
-        Evaluation electrolyteMolal;
-        std::pair<Electrolyte, Evaluation> electrolyte;
-        if (cationIdx == SaltIndex::MG && anionIdx == SaltIndex::SO4) {
-            // 1m Mg+ + 1m SO4-- = 1m MgSO4
-            electrolyteMolal = min(cation, anion);
-            cation -= electrolyteMolal;
-            anion -= electrolyteMolal;
-            electrolyte = {Electrolyte::MgSO4, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::NA && anionIdx == SaltIndex::SO4) {
-            // 2m Na+ + 1m SO4-- = 1m Na2SO4
-            electrolyteMolal = min(cation / 2.0, anion);
-            cation -= electrolyteMolal * 2.0;
-            anion -= electrolyteMolal;
-            electrolyte = {Electrolyte::Na2SO4, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::K && anionIdx == SaltIndex::SO4) {
-            // 2m K+ + 1m SO4-- = 1m K2SO4
-            electrolyteMolal = min(cation / 2.0, anion);
-            cation -= electrolyteMolal * 2.0;
-            anion -= electrolyteMolal;
-            electrolyte = {Electrolyte::K2SO4, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::MG && anionIdx == SaltIndex::CL) {
-            // 1m Mg+ + 2m Cl- = 1m MgCl2
-            electrolyteMolal = min(cation, anion / 2.0);
-            cation -= electrolyteMolal;
-            anion -= electrolyteMolal * 2.0;
-            electrolyte = {Electrolyte::MgCl2, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::CA && anionIdx == SaltIndex::CL) {
-            // 1m Ca+ + 2m Cl- = 1m CaCl2
-            electrolyteMolal = min(cation, anion / 2.0);
-            cation -= electrolyteMolal;
-            anion -= electrolyteMolal * 2.0;
-            electrolyte = {Electrolyte::CaCl2, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::NA && anionIdx == SaltIndex::CL) {
-            // 1m Na+ + 1m Cl- = 1m NaCl
-            electrolyteMolal = min(cation, anion);
-            cation -= electrolyteMolal;
-            anion -= electrolyteMolal;
-            electrolyte = {Electrolyte::NaCl, electrolyteMolal};
-        } else if (cationIdx == SaltIndex::K && anionIdx == SaltIndex::CL) {
-            // 1m K+ + 1m Cl- = 1m KCl
-            electrolyteMolal = min(cation, anion);
-            cation -= electrolyteMolal;
-            anion -= electrolyteMolal;
-            electrolyte = {Electrolyte::KCl, electrolyteMolal};
-        } else {
-            // No electrolyte for cation/anion pair; signal this with nullopt return (see
-            // fromIonMolality_ loop)
-            return std::nullopt;
+        for (const auto& p : pairings) {
+            if (p.cation != cationIdx || p.anion != anionIdx) {
+                continue;
+            }
+            const Evaluation electrolyteMolal = min(cation / p.cationsPer, anion / p.anionsPer);
+            cation -= electrolyteMolal * p.cationsPer;
+            anion -= electrolyteMolal * p.anionsPer;
+            return std::pair<Electrolyte, Evaluation>{p.electrolyte, electrolyteMolal};
         }
-
-        return electrolyte;
+        return std::nullopt;
     }
 
     /*!

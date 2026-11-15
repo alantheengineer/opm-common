@@ -863,6 +863,7 @@ list(APPEND TEST_DATA_FILES
   tests/material/h2o_unittest.json
   tests/material/ref_data_density_multicomponent_salts.json
   tests/material/ref_data_density_single_salts.json
+  tests/material/ref_data_laliberte_2009.json
   tests/material/ref_data_viscosity_multicomponent_salts.json
   tests/material/ref_data_viscosity_single_salts.json
   tests/material/ref_values_threecomponents_ptflash.json
@@ -1370,19 +1371,24 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/material/common/quad.hpp
   opm/material/components/Air.hpp
   opm/material/components/Brine.hpp
+  opm/material/components/BOH3.hpp
   opm/material/components/BrineDynamic.hpp
+  opm/material/components/BrIon.hpp
   opm/material/components/C1.hpp
   opm/material/components/C10.hpp
   opm/material/components/CaIon.hpp
   opm/material/components/ClIon.hpp
   opm/material/components/CO2.hpp
   opm/material/components/CO2Tables.hpp
+  opm/material/components/CO3Ion.hpp
   opm/material/components/Component.hpp
   opm/material/components/ComponentCp.hpp
   opm/material/components/Dnapl.hpp
   opm/material/components/H2.hpp
   opm/material/components/H2O.hpp
+  opm/material/components/HCO3Ion.hpp
   opm/material/components/KIon.hpp
+  opm/material/components/LiIon.hpp
   opm/material/components/Lnapl.hpp
   opm/material/components/Mesitylene.hpp
   opm/material/components/MgIon.hpp
@@ -1393,6 +1399,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/material/components/SimpleH2O.hpp
   opm/material/components/SimpleHuDuanH2O.hpp
   opm/material/components/SO4Ion.hpp
+  opm/material/components/SrIon.hpp
   opm/material/components/TabulatedComponent.hpp
   opm/material/components/Unit.hpp
   opm/material/components/Xylene.hpp

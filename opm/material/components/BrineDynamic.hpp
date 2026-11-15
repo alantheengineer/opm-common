@@ -35,6 +35,8 @@
 #include <opm/material/common/MathToolbox.hpp>
 
 #include <cassert>
+#include <array>
+#include <cstddef>
 #include <numeric>
 #include <span>
 #include <string_view>
@@ -599,6 +601,7 @@ public:
 
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
+    static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
 
     //Molar mass salt (assumes pure NaCl) [kg/mol]
     static constexpr Scalar mM_salt()
@@ -615,28 +618,7 @@ private:
     static std::span<const Scalar, 5>
     densityCoefficients(const Electrolyte electrolyte)
     {
-        if (electrolyte == Electrolyte::CaCl2) {
-            return cDensCaCl2;
-        }
-        if (electrolyte == Electrolyte::KCl) {
-            return cDensKCl;
-        }
-        if (electrolyte == Electrolyte::K2SO4) {
-            return cDensK2SO4;
-        }
-        if (electrolyte == Electrolyte::MgCl2) {
-            return cDensMgCl2;
-        }
-        if (electrolyte == Electrolyte::MgSO4) {
-            return cDensMgSO4;
-        }
-        if (electrolyte == Electrolyte::NaCl) {
-            return cDensNaCl;
-        }
-        if (electrolyte == Electrolyte::Na2SO4) {
-            return cDensNa2SO4;
-        }
-        throw std::runtime_error("Unknown Electrolyte!");
+        return cDens[static_cast<std::size_t>(electrolyte)];
     }
 
     /*!
@@ -648,28 +630,7 @@ private:
     static std::span<const Scalar, 6>
     viscosityCoefficients(const Electrolyte electrolyte)
     {
-        if (electrolyte == Electrolyte::CaCl2) {
-            return cViscCaCl2;
-        }
-        if (electrolyte == Electrolyte::KCl) {
-            return cViscKCl;
-        }
-        if (electrolyte == Electrolyte::K2SO4) {
-            return cViscK2SO4;
-        }
-        if (electrolyte == Electrolyte::MgCl2) {
-            return cViscMgCl2;
-        }
-        if (electrolyte == Electrolyte::MgSO4) {
-            return cViscMgSO4;
-        }
-        if (electrolyte == Electrolyte::NaCl) {
-            return cViscNaCl;
-        }
-        if (electrolyte == Electrolyte::Na2SO4) {
-            return cViscNa2SO4;
-        }
-        throw std::runtime_error("Unknown Electrolyte!");
+        return cVisc[static_cast<std::size_t>(electrolyte)];
     }
 
     /*!
@@ -704,24 +665,97 @@ private:
         return (tempC + 246.0) / ((0.05594 * tempC + 5.2842) * tempC + 137.37);
     }
 
-    // Coefficients for density from Laliberte & Cooper, J. Chem. Eng. Data 49, 2004
-    static constexpr Scalar cDensCaCl2[5] = {-0.63254, 0.93995, 4.2785, 0.048319, 3180.9};
-    static constexpr Scalar cDensKCl[5] = {-0.46782, 4.30800, 2.3780, 0.022044, 2714.0};
-    static constexpr Scalar cDensK2SO4[5] = {-2.6681e-5, 3.0412e-5, 0.97118, 0.019816, 4366.1};
-    static constexpr Scalar cDensMgCl2[5] = {-0.00051500, 0.0013444, 0.58358, 0.0085832, 3843.6};
-    static constexpr Scalar cDensMgSO4[5] = {3.9412e-7, 1.4425e-6, -0.05372, 0.002062, 4563.3};
-    static constexpr Scalar cDensNaCl[5] = {-0.00433, 0.06471, 1.01660, 0.014624, 3315.6};
-    static constexpr Scalar cDensNa2SO4[5] = {-1.2095e-7, 4.3474e-7, 0.15364, 0.0072514, 4731.5};
+    // Density coefficients c0 to c4 in Electrolyte order. The first seven are from Laliberte
+    // and Cooper, J. Chem. Eng. Data 49, 2004, Table 3; the rest from the refit in Laliberte,
+    // J. Chem. Eng. Data 54, 2009, Supporting Information.
+    static constexpr std::array<std::array<Scalar, 5>, numElectrolytes> cDens = {{
+        // CaCl2
+        {-0.63254, 0.93995, 4.2785, 0.048319, 3180.9},
+        // KCl
+        {-0.46782, 4.30800, 2.3780, 0.022044, 2714.0},
+        // K2SO4
+        {-2.6681e-5, 3.0412e-5, 0.97118, 0.019816, 4366.1},
+        // MgCl2
+        {-0.00051500, 0.0013444, 0.58358, 0.0085832, 3843.6},
+        // MgSO4
+        {3.9412e-7, 1.4425e-6, -0.05372, 0.002062, 4563.3},
+        // NaCl
+        {-0.00433, 0.06471, 1.01660, 0.014624, 3315.6},
+        // Na2SO4
+        {-1.2095e-7, 4.3474e-7, 0.15364, 0.0072514, 4731.5},
+        // LiCl
+        {1777.71168869463, 208.095675885873, 0.0924032897423372, -9.65138194640463e-05,
+         -303.212122198705},
+        // Li2SO4
+        {0.00711493013455434, 0.00869246384846451, 0.151649349676449, 0.00360862647418256,
+         3458.25184736606},
+        // SrCl2
+        {1.35341758029363e-06, -7.48767819877433e-07, -1.93563339996439, 0.010704329282332,
+         -4882.14470009011},
+        // NaBr
+        {23.765937876294, 210.721942848473, 2.01023472140861, 0.0163941235513688, 1941.82908042744},
+        // KBr
+        {-13.151388032057, 190.74540854419, 5.39738604657711, 0.0402662461365671, 2153.22549041443},
+        // NaHCO3
+        {0.0377378060615898, 0.00710029652458366, 0.0735733388535116, 0.00168369765511221,
+         3291.38382252025},
+        // Na2CO3
+        {5.45486543455015e-07, 1.72154929405038e-07, -0.0825850207323492, 0.00168822949783412,
+         4705.39822185746},
+        // KHCO3
+        {0.0458479253730966, 0.0749127808255568, 0.505766905030703, 0.00643951863958203,
+         3163.65175558093},
+        // K2CO3
+        {2290.10867876218, 1038.77363895405, 0.109769327294915, 0.000497783340935823,
+         -74.0786862142127},
+    }};
 
-    // Coefficients for viscosity from Laliberte, J. Chem. Eng. Data 52 (2), 2007 and the
-    // correction paper Laliberte, J. Chem. Eng. Data 52(4), 2007
-    static constexpr Scalar cViscCaCl2[6] = {32.028, 0.78792, -1.1495, 0.0026995, 780860, 5.8442};
-    static constexpr Scalar cViscKCl[6] = {6.4883, 1.3175, -0.77785, 0.092722, -1.3, 2.0811};
-    static constexpr Scalar cViscK2SO4[6] = {-983.76, 983.76, 984.52, 0.0038473, -9.5001, 2.1916};
-    static constexpr Scalar cViscMgCl2[6] = {24.032, 2.2694, 3.7108, 0.021853, -1.1236, 0.14474};
-    static constexpr Scalar cViscMgSO4[6] = {72.269, 2.2238, 6.6037, 0.0079004, 3340.1, 6.1304};
-    static constexpr Scalar cViscNaCl[6] = {16.222, 1.3229, 1.4849, 0.0074691, 30.78, 2.0583};
-    static constexpr Scalar cViscNa2SO4[6] = {26.519, 1.5746, 3.4966, 0.010388, 106.23, 2.9738};
+    // Viscosity coefficients v1 to v6 in Electrolyte order. The first seven are from
+    // Laliberte, J. Chem. Eng. Data 52 (2), 2007 and its correction, J. Chem. Eng. Data 52 (4),
+    // 2007; the rest from Laliberte, J. Chem. Eng. Data 54, 2009, Supporting Information.
+    static constexpr std::array<std::array<Scalar, 6>, numElectrolytes> cVisc = {{
+        // CaCl2
+        {32.028, 0.78792, -1.1495, 0.0026995, 780860, 5.8442},
+        // KCl
+        {6.4883, 1.3175, -0.77785, 0.092722, -1.3, 2.0811},
+        // K2SO4
+        {-983.76, 983.76, 984.52, 0.0038473, -9.5001, 2.1916},
+        // MgCl2
+        {24.032, 2.2694, 3.7108, 0.021853, -1.1236, 0.14474},
+        // MgSO4
+        {72.269, 2.2238, 6.6037, 0.0079004, 3340.1, 6.1304},
+        // NaCl
+        {16.222, 1.3229, 1.4849, 0.0074691, 30.78, 2.0583},
+        // Na2SO4
+        {26.519, 1.5746, 3.4966, 0.010388, 106.23, 2.9738},
+        // LiCl
+        {18.6178234588751, 0.773036318483134, 2.15660166137342, 0.00435445218019151,
+         1023.45333257758, 2.38089336779273},
+        // Li2SO4
+        {42.4909603154037, 2.21333353374412, 6.06402999044027, 0.00814290129030605,
+         24.1674397087677, 2.96004938607259},
+        // SrCl2
+        {8.03309316438313, 1.85314812521892, 1.99358226403085, 0.00848650077967969,
+         -4.98502701890093, 2.88704932687605},
+        // NaBr
+        {13.02905395428, 1.74783698289335, 0.604127008790876, 0.0108036956912202, 17.6807414205322,
+         2.3830591098608},
+        // KBr
+        {348.31972605609, -0.000302529305665952, -349.153198551268, -0.00425795862818544,
+         -1.10436123629246, 0.763153789481199},
+        // NaHCO3
+        {31.5819207092739, 0.0794532561718167, -16.9096255040761, 0.0013751751230389,
+         44188.6551718116, 1.88902235502575},
+        // Na2CO3
+        {27.6831996816743, 1.56324040665499, 6.80529471973068, 0.0150777050822261, 22452.3440720574,
+         28.2362397327323},
+        // KHCO3
+        {0.23545396225936, -1.07084725909778, 2.35937892744089, 0.0639877898997282,
+         -1.00034737120549, 0.501215910081986},
+        // K2CO3
+        {41.3874564880263, 3.67791349310373, 3.26807400039543, 0.00876702412403997,
+         8684.04398141182, 12.7276295460364},
+    }};
 };
 
 } // namespace Opm
