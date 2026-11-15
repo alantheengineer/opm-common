@@ -407,8 +407,8 @@ public:
                                  const Evaluation& rhow)
     {
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
-        // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) uses std::vector and
-        // host-only logging, and is therefore not supported on the GPU yet.
+        // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) throws on unknown
+        // ions and electrolytes, and is therefore not supported on the GPU yet.
         assert(false && "liquidDensityLaliberteCooper is not supported on the GPU");
         return rhow;
 #else
@@ -560,8 +560,8 @@ public:
                              const Evaluation& muW)
     {
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
-        // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) uses std::vector and
-        // host-only logging, and is therefore not supported on the GPU yet.
+        // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) throws on unknown
+        // ions and electrolytes, and is therefore not supported on the GPU yet.
         assert(false && "liquidViscosityLaliberte is not supported on the GPU");
         return muW * 1e-3;
 #else

@@ -19,7 +19,9 @@
 
 #include <opm/input/eclipse/EclipseState/Co2StoreConfig.hpp>
 
+#include <opm/common/OpmLog/OpmLog.hpp>
 #include <opm/common/utility/OpmInputError.hpp>
+#include <opm/common/utility/SaltElectrolytes.hpp>
 
 #include <opm/input/eclipse/EclipseState/Tables/Tabdims.hpp>
 
@@ -34,6 +36,8 @@
 #include <opm/input/eclipse/Parser/ParserKeywords/V.hpp>
 
 #include <cstddef>
+
+#include <fmt/format.h>
 
 namespace {
     template <class EzrokhiTable>
@@ -153,6 +157,13 @@ namespace Opm {
             SaltArray<double, SaltMolality> salinitcArray;
             salinitcArray.assignFromDeckRecord(salinitc);
             saltArray = salinitcArray.convert_to<SaltMassFraction>();
+            const double unpaired = SaltElectrolytes<double>::unpairedMolality(saltArray);
+            if (unpaired > SaltElectrolytes<double>::molalTolerance) {
+                OpmLog::warning(fmt::format("SALINITC: {:.6f} mol/kg of the salt ions do not "
+                                            "pair into supported electrolytes and are left out "
+                                            "of the brine properties.",
+                                            unpaired));
+            }
         }
 
         // ACTCO2S

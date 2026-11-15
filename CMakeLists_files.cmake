@@ -717,6 +717,7 @@ list(APPEND DUNE_TEST_SOURCE_FILES
   tests/test_SymmTensor.cpp
   tests/material/test_blackoilfluidstate.cpp
   tests/material/test_blackoilfluidsystem_nonstatic.cpp
+  tests/material/test_brine_allocations.cpp
   tests/material/test_co2brinepvt.cpp
   tests/material/test_co2brine_ptflash.cpp
   tests/material/test_components.cpp
@@ -946,6 +947,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/common/utility/ConstexprAssert.hpp
   opm/common/utility/DemangledType.hpp
   opm/common/utility/FileSystem.hpp
+  opm/common/utility/FixedCapacityList.hpp
   opm/common/utility/IteratorRange.hpp
   opm/common/utility/MemPacker.hpp
   opm/common/utility/OpmInputError.hpp

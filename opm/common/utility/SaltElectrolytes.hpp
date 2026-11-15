@@ -1,5 +1,6 @@
 /*
   Copyright 2026 NORCE.
+  Copyright 2026 Dr Alan Tominey.
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -19,7 +20,7 @@
 #ifndef OPM_SALTELECTROLYTES_HPP
 #define OPM_SALTELECTROLYTES_HPP
 
-#include <opm/common/OpmLog/OpmLog.hpp>
+#include <opm/common/utility/FixedCapacityList.hpp>
 #include <opm/common/utility/SaltArray.hpp>
 
 #include <opm/material/common/MathToolbox.hpp>
@@ -30,12 +31,10 @@
 #include <opm/material/components/NaIon.hpp>
 #include <opm/material/components/SO4Ion.hpp>
 
-#include <fmt/format.h>
-
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace Opm
 {
@@ -54,8 +53,16 @@ public:
     /// Supported electrolytes for Laliberte viscosity and Laliberte-Cooper density
     enum class Electrolyte
     {
-        CaCl2, KCl, K2SO4, MgCl2, MgSO4, NaCl, Na2SO4
+        CaCl2, KCl, K2SO4, MgCl2, MgSO4, NaCl, Na2SO4,
+        NUM // Must be last: the number of electrolytes
     };
+
+    static constexpr std::size_t numElectrolytes = static_cast<std::size_t>(Electrolyte::NUM);
+
+    /// Electrolytes and their mass fractions, held without heap allocation. Each
+    /// cation-anion pair is visited once, so no electrolyte appears twice.
+    template <class Evaluation>
+    using ElectrolyteList = FixedCapacityList<std::pair<Electrolyte, Evaluation>, numElectrolytes>;
 
     /*!
      * Molar mass of electrolyte
@@ -89,13 +96,14 @@ public:
      * Generate electrolytes from salt ions
      *
      * @param salinity Array of salt ions
-     * @return Vector of electrolytes and their mass fractions
+     * @return Electrolytes and their mass fractions
      */
     template <class Evaluation>
-    static std::vector<std::pair<Electrolyte, Evaluation> >
+    static ElectrolyteList<Evaluation>
     fromSaltComponents(const SaltArray<Evaluation, SaltMassFraction>& salinity)
     {
-        auto electrolytes = fromIonMolality_(salinity.template convert_to<SaltMolality>());
+        auto molality = salinity.template convert_to<SaltMolality>();
+        auto electrolytes = fromIonMolality_(molality);
 
         // Convert salt electrolytes from molality to mass fraction
         molalToMassFrac_(electrolytes);
@@ -103,23 +111,38 @@ public:
         return electrolytes;
     }
 
-private:
+    /*!
+     * Molality of the ions left unpaired by fromSaltComponents. Those ions take no part in
+     * the brine properties, so input checks warn when this is above zero.
+     *
+     * @param salinity Array of salt ions
+     * @return Sum of unpaired ion molalities [mol/kg water]
+     */
+    template <class Evaluation>
+    static Evaluation unpairedMolality(const SaltArray<Evaluation, SaltMassFraction>& salinity)
+    {
+        auto molality = salinity.template convert_to<SaltMolality>();
+        fromIonMolality_(molality);
+        return molality.sum();
+    }
+
     static constexpr Scalar molalTolerance = 1e-6; ///< tolerance for molality calculations
+
+private:
 
     /*!
      * Generate electrolytes (in molality) from salt ion molalities
      *
-     * @param ionMolality Molality of each salt ion
-     * @return Vector of electrolytes and their molality [mol electrolyte/kg water]
+     * @param molalSalinity Molality of each salt ion; left holding the unpaired molalities
+     * @return Electrolytes and their molality [mol electrolyte/kg water]
      */
     template <class Evaluation>
-    static std::vector<std::pair<Electrolyte, Evaluation> >
-    fromIonMolality_(const SaltArray<Evaluation, SaltMolality>& ionMolality)
+    static ElectrolyteList<Evaluation>
+    fromIonMolality_(SaltArray<Evaluation, SaltMolality>& molalSalinity)
     {
         // Generate (valid) electrolytes from salt components
-        auto molalSalinity = ionMolality;
-        auto [cations, anions] = molalSalinity.cations_and_anions();
-        std::vector<std::pair<Electrolyte, Evaluation> > electrolytes;
+        const auto [cations, anions] = molalSalinity.cations_and_anions();
+        ElectrolyteList<Evaluation> electrolytes;
         for (const auto& anionIdx : anions) {
             auto& molalAnion = molalSalinity[anionIdx];
             for (std::size_t i = 0; i < cations.size() && molalAnion >= molalTolerance; ++i) {
@@ -141,19 +164,6 @@ private:
                     electrolytes.push_back(*electrolyte);
                 }
             }
-        }
-
-        // Warn if there is any leftover molality after generating electrolytes
-        if (molalSalinity.sum() > molalTolerance) {
-            OpmLog::debug(
-                "Salt electrolyte conversion residual",
-                fmt::format(
-                    fmt::runtime("Sum molality of salt components (={:.6f}) > tolerance (={}) "
-                        "after conversion to electrolytes, and will be ignored in the "
-                        "brine property calculations!"),
-                    static_cast<double>(scalarValue(molalSalinity.sum())),
-                    static_cast<double>(molalTolerance))
-                );
         }
 
         return electrolytes;
@@ -240,11 +250,11 @@ private:
     /*!
      * Convert electrolyte molality to mass fraction
      *
-     * @param electrolyte Vector of electrolytes and their molality
+     * @param electrolyte Electrolytes and their molality
      */
     template <class Evaluation>
     static void
-    molalToMassFrac_(std::vector<std::pair<Electrolyte, Evaluation> >& electrolyte)
+    molalToMassFrac_(ElectrolyteList<Evaluation>& electrolyte)
     {
         Evaluation sum = 1.0;
         for (auto& salt : electrolyte) {

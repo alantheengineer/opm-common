@@ -1,5 +1,6 @@
 /*
   Copyright 2026 NORCE.
+  Copyright 2026 Dr Alan Tominey.
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -22,6 +23,7 @@
 #include <opm/input/eclipse/Deck/DeckRecord.hpp>
 
 #include <opm/common/ErrorMacros.hpp>
+#include <opm/common/utility/FixedCapacityList.hpp>
 #include <opm/common/utility/gpuDecorators.hpp>
 
 #include <opm/material/components/CaIon.hpp>
@@ -31,11 +33,10 @@
 #include <opm/material/components/NaIon.hpp>
 #include <opm/material/components/SO4Ion.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
-#include <numeric>
+#include <utility>
 
 namespace Opm
 {
@@ -63,6 +64,15 @@ enum class SaltIndex : std::size_t
     NA, K, CA, MG, CL, SO4,
     NCOMP // DO NOT CHANGE! Must be the last enum to set size of SaltArray!
 };
+
+/// Number of salt ions in SaltIndex
+inline constexpr std::size_t numSaltIons = static_cast<std::size_t>(SaltIndex::NCOMP);
+
+/// Largest ion charge in SaltIndex, by absolute value
+inline constexpr short maxIonCharge = 2;
+
+/// Salt ion indices held without heap allocation
+using SaltIndexList = FixedCapacityList<SaltIndex, numSaltIons>;
 
 /// Enum for classifying cations and anions
 enum class IonType
@@ -194,9 +204,9 @@ template <class T, class SaltUnit>
 class SaltArray
 {
 public:
-    using SaltIndexPair = std::pair<std::vector<SaltIndex>, std::vector<SaltIndex> >;
+    using SaltIndexPair = std::pair<SaltIndexList, SaltIndexList>;
 
-    static constexpr std::size_t ncomp = static_cast<std::size_t>(SaltIndex::NCOMP);
+    static constexpr std::size_t ncomp = numSaltIons;
 
     /*!
      * Default constructor
@@ -383,46 +393,29 @@ public:
     }
 
     /*!
-     * Get cations and anions of non-zero ions in descending ion strength
+     * Get cations and anions of non-zero ions, cations by falling charge and anions by
+     * rising charge. Ions of equal charge keep their SaltIndex order.
      *
-     * @return Pair of cation and anion vectors
+     * @return Pair of cation and anion lists
      */
     [[nodiscard]] SaltIndexPair cations_and_anions() const
     {
-        std::vector<std::pair<short, SaltIndex> > cations;
-        std::vector<std::pair<short, SaltIndex> > anions;
-        cations.reserve(size());
-        anions.reserve(size());
-        for (std::size_t i = 0; i < size(); ++i) {
-            auto ind = static_cast<SaltIndex>(i);
-            auto ionStr = ionStrength(ind);
-            if ((*this)[ind] != T{}) {
-                if (categorizeIon(ind) == IonType::Cation) {
-                    cations.emplace_back(ionStr, ind);
-
-                } else {
-                    anions.emplace_back(ionStr, ind);
+        SaltIndexPair ions;
+        for (short z = maxIonCharge; z > 0; --z) {
+            for (std::size_t i = 0; i < size(); ++i) {
+                const auto ind = static_cast<SaltIndex>(i);
+                if (saltData_[i] == T{}) {
+                    continue;
+                }
+                const auto charge = ionStrength(ind);
+                if (charge == z) {
+                    ions.first.push_back(ind);
+                } else if (charge == -z) {
+                    ions.second.push_back(ind);
                 }
             }
         }
-
-        // Sort by ion strength: descending for cations, ascending for anions
-        std::ranges::sort(cations, std::ranges::greater{}, &std::pair<short, SaltIndex>::first);
-        std::ranges::sort(anions, {}, &std::pair<short, SaltIndex>::first);
-
-        // Return only cations and anions SaltIndex
-        std::vector<SaltIndex> cationIndex;
-        std::vector<SaltIndex> anionIndex;
-        cationIndex.reserve(cations.size());
-        anionIndex.reserve(anions.size());
-        std::ranges::transform(cations,
-                               std::back_inserter(cationIndex),
-                               &std::pair<short, SaltIndex>::second);
-        std::ranges::transform(anions,
-                               std::back_inserter(anionIndex),
-                               &std::pair<short, SaltIndex>::second);
-
-        return {cationIndex, anionIndex};
+        return ions;
     }
 
     /*!
