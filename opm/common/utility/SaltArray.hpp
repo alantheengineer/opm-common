@@ -58,7 +58,8 @@ struct SaltMoleFraction
 template <class FromSaltUnit, class ToSaltUnit>
 struct SaltUnitConverter;
 
-/// Salt ion indices for SaltArray
+/// Salt ion indices for SaltArray. New ions go at the end so that serialized arrays keep
+/// their meaning.
 enum class SaltIndex : std::size_t
 {
     NA, K, CA, MG, CL, SO4,
@@ -430,10 +431,24 @@ public:
         return SaltUnitConverter<SaltUnit, NewSaltUnit>::template convert<T>(*this);
     }
 
+    /*!
+     * The ion count goes first, so data written before ions were appended to SaltIndex still
+     * loads, with the ions it lacks set to zero.
+     */
     template <class Serializer>
     void serializeOp(Serializer& serializer)
     {
-        serializer(saltData_);
+        std::size_t count = ncomp;
+        serializer(count);
+        if (count > ncomp) {
+            OPM_THROW(std::runtime_error, "Serialized SaltArray has more ions than SaltIndex");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            serializer(saltData_[i]);
+        }
+        for (std::size_t i = count; i < ncomp; ++i) {
+            saltData_[i] = T{};
+        }
     }
 
 private:

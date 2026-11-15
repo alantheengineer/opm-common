@@ -18,7 +18,9 @@
  */
 #include <config.h>
 
+#include <opm/common/utility/MemPacker.hpp>
 #include <opm/common/utility/SaltArray.hpp>
+#include <opm/common/utility/Serializer.hpp>
 #include <opm/material/densead/Evaluation.hpp>
 
 #define BOOST_TEST_MODULE SaltArrayTests
@@ -270,4 +272,53 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(CationAnionTests, Eval, EvalTypes)
     // Anions in descending ion strength
     BOOST_CHECK(anions3[0] == SaltIndex::SO4);
     BOOST_CHECK(anions3[1] == SaltIndex::CL);
+}
+
+namespace
+{
+// Writes the layout of a SaltArray that held only the first `count` ions.
+struct ShorterSaltArray
+{
+    std::size_t count = 0;
+    double value = 0.0;
+
+    template <class Serializer>
+    void serializeOp(Serializer& serializer)
+    {
+        serializer(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            double v = value * static_cast<double>(i + 1);
+            serializer(v);
+        }
+    }
+};
+} // namespace
+
+BOOST_AUTO_TEST_CASE(SerializationTests)
+{
+    SaltArray<double, SaltMassFraction> in;
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        in[static_cast<SaltIndex>(i)] = 0.01 * static_cast<double>(i + 1);
+    }
+    Serialization::MemPacker packer;
+    Serializer ser(packer);
+    ser.pack(in);
+    SaltArray<double, SaltMassFraction> out;
+    ser.unpack(out);
+    BOOST_CHECK(in == out);
+
+    // Data written when SaltIndex was shorter loads, with the missing ions zero
+    const std::size_t count = in.size() - 2;
+    ShorterSaltArray older {count, 0.01};
+    ser.pack(older);
+    ser.unpack(out);
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const double expected = i < count ? 0.01 * static_cast<double>(i + 1) : 0.0;
+        BOOST_CHECK_EQUAL(out[static_cast<SaltIndex>(i)], expected);
+    }
+
+    // More ions than SaltIndex holds is refused
+    ShorterSaltArray newer {in.size() + 1, 0.01};
+    ser.pack(newer);
+    BOOST_CHECK_THROW(ser.unpack(out), std::runtime_error);
 }
