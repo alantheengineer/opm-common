@@ -709,7 +709,7 @@ private:
     static constexpr Scalar cDensKCl[5] = {-0.46782, 4.30800, 2.3780, 0.022044, 2714.0};
     static constexpr Scalar cDensK2SO4[5] = {-2.6681e-5, 3.0412e-5, 0.97118, 0.019816, 4366.1};
     static constexpr Scalar cDensMgCl2[5] = {-0.00051500, 0.0013444, 0.58358, 0.0085832, 3843.6};
-    static constexpr Scalar cDensMgSO4[5] = {0.0032447, 0.057246, 0.05136, 0.002146, 3287.8};
+    static constexpr Scalar cDensMgSO4[5] = {3.9412e-7, 1.4425e-6, -0.05372, 0.002062, 4563.3};
     static constexpr Scalar cDensNaCl[5] = {-0.00433, 0.06471, 1.01660, 0.014624, 3315.6};
     static constexpr Scalar cDensNa2SO4[5] = {-1.2095e-7, 4.3474e-7, 0.15364, 0.0072514, 4731.5};
 

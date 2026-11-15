@@ -78,7 +78,9 @@
 
 #include <opm/json/JsonObject.hpp>
 
+#include <array>
 #include <ranges>
+#include <utility>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -947,6 +949,28 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineSingleSaltsWithSimpleHuDuanH2OClass, Scalar, 
                     S.value());
             BOOST_CHECK_MESSAGE(close_at_tolerance(densH2O, dens_ref, tol_dens_h2o[salt]), msgH2O);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMgSO4Density, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::SimpleHuDuanH2O<Scalar>>;
+
+    // MgSO4 brine at 25 C from the Laliberte (2009) refit, as computed by the thermo
+    // package. The 2004 coefficients used here agree with it to 2e-4.
+    const std::array<std::pair<Scalar, Scalar>, 3> massFracAndDensity = {{
+        {0.05, 1048.393548}, {0.10, 1101.900901}, {0.20, 1217.713645}}};
+
+    Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
+    for (const auto& [w, ref] : massFracAndDensity) {
+        saltArray.clear();
+        addSaltMassFraction<Scalar>(saltArray, "mgso4", Evaluation(w));
+        const Evaluation T(298.15);
+        const Evaluation p(101325.0);
+        const Scalar dens = BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value();
+        BOOST_CHECK_MESSAGE(close_at_tolerance(dens, ref, Scalar(5e-4)),
+                            "MgSO4 density " << dens << " against " << ref << " at w = " << w);
     }
 }
 
