@@ -71,17 +71,17 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(MolarMassTests, Eval, EvalTypes)
                        2.0 * NaIon<Scalar>::molarMass() + SO4Ion<Scalar>::molarMass(),
                        tol);
     BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::LiCl),
-                       static_cast<Scalar>(42.39e-3),
-                       static_cast<Scalar>(0.01));
+                      static_cast<Scalar>(42.39e-3),
+                      static_cast<Scalar>(0.01));
     BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::SrCl2),
-                       static_cast<Scalar>(158.53e-3),
-                       static_cast<Scalar>(0.01));
+                      static_cast<Scalar>(158.53e-3),
+                      static_cast<Scalar>(0.01));
     BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::K2CO3),
-                       static_cast<Scalar>(138.21e-3),
-                       static_cast<Scalar>(0.01));
+                      static_cast<Scalar>(138.21e-3),
+                      static_cast<Scalar>(0.01));
     BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::BOH3),
-                       static_cast<Scalar>(61.83e-3),
-                       static_cast<Scalar>(0.01));
+                      static_cast<Scalar>(61.83e-3),
+                      static_cast<Scalar>(0.01));
 }
 
 BOOST_AUTO_TEST_CASE_TEMPLATE(ZeroSalinityTests, Eval, EvalTypes)
@@ -109,6 +109,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(SingleElectrolyteTests, Eval, EvalTypes)
         Scalar anionMolal;
         Electrolyte electrolyte;
     };
+    // clang-format off
     const std::vector<Case> cases = {
         {SaltIndex::NA, 0.7, SaltIndex::CL, 0.7, Electrolyte::NaCl},
         {SaltIndex::K,  0.7, SaltIndex::CL, 0.7, Electrolyte::KCl},
@@ -128,6 +129,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(SingleElectrolyteTests, Eval, EvalTypes)
         {SaltIndex::K,  1.4, SaltIndex::CO3, 0.7, Electrolyte::K2CO3},
         {SaltIndex::B,  0.7, SaltIndex::B, 0.0, Electrolyte::BOH3},
     };
+    // clang-format on
     BOOST_CHECK_EQUAL(cases.size(), SaltElectrolytes<Scalar>::numElectrolytes);
 
     for (const auto& c : cases) {
@@ -262,10 +264,12 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BasinBrineTests, Eval, EvalTypes)
     const auto salinity = molal.template convert_to<SaltMassFraction>();
 
     const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    // clang-format off
     const std::vector<Electrolyte> expected = {
         Electrolyte::MgSO4, Electrolyte::Na2CO3, Electrolyte::CaCl2, Electrolyte::MgCl2,
         Electrolyte::SrCl2, Electrolyte::NaCl, Electrolyte::KCl, Electrolyte::KBr,
         Electrolyte::BOH3};
+    // clang-format on
     BOOST_REQUIRE_EQUAL(electrolytes.size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
         BOOST_CHECK(electrolytes[i].first == expected[i]);

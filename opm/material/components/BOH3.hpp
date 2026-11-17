@@ -37,7 +37,7 @@ namespace Opm
  * \tparam Scalar The type used for scalar values
  */
 template <class Scalar>
-class BOH3 : public Component<Scalar, BOH3<Scalar> >
+class BOH3 : public Component<Scalar, BOH3<Scalar>>
 {
 public:
     /*!
@@ -57,6 +57,6 @@ public:
     }
 };
 
-}
+} // namespace Opm
 
-#endif //OPM_BOH3_HPP
+#endif // OPM_BOH3_HPP

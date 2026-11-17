@@ -66,12 +66,14 @@ struct SaltUnitConverter;
 
 /// Salt ion indices for SaltArray. New ions go at the end so that serialized arrays keep
 /// their meaning. B is total dissolved boron, carried as B(OH)3.
+// clang-format off
 enum class SaltIndex : std::size_t
 {
     NA, K, CA, MG, CL, SO4,
     LI, SR, BR, HCO3, CO3, B,
     NCOMP // DO NOT CHANGE! Must be the last enum to set size of SaltArray!
 };
+// clang-format on
 
 /// Number of salt ions in SaltIndex
 inline constexpr std::size_t numSaltIons = static_cast<std::size_t>(SaltIndex::NCOMP);
@@ -83,10 +85,7 @@ inline constexpr short maxIonCharge = 2;
 using SaltIndexList = FixedCapacityList<SaltIndex, numSaltIons>;
 
 /// Enum for classifying cations, anions and neutral solutes
-enum class IonType
-{
-    Cation, Anion, Neutral
-};
+enum class IonType { Cation, Anion, Neutral };
 
 /*!
  * Converts ion string name to index
@@ -462,7 +461,7 @@ public:
         for (short z = maxIonCharge; z > 0; --z) {
             for (std::size_t i = 0; i < size(); ++i) {
                 const auto ind = static_cast<SaltIndex>(i);
-                if (saltData_[i] == T{}) {
+                if (saltData_[i] == T {}) {
                     continue;
                 }
                 const auto charge = ionStrength(ind);
@@ -504,7 +503,7 @@ public:
             serializer(saltData_[i]);
         }
         for (std::size_t i = count; i < ncomp; ++i) {
-            saltData_[i] = T{};
+            saltData_[i] = T {};
         }
     }
 

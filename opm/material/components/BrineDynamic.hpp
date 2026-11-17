@@ -34,8 +34,8 @@
 #include <opm/material/components/Component.hpp>
 #include <opm/material/common/MathToolbox.hpp>
 
-#include <cassert>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <limits>
 #include <numeric>
@@ -698,6 +698,7 @@ private:
     // Density coefficients c0 to c4 in Electrolyte order. The first seven are from Laliberte
     // and Cooper, J. Chem. Eng. Data 49, 2004, Table 3; the rest from the refit in Laliberte,
     // J. Chem. Eng. Data 54, 2009, Supporting Information.
+    // clang-format off
     static constexpr std::array<std::array<Scalar, 5>, numElectrolytes> cDens = {{
         // CaCl2
         {-0.63254, 0.93995, 4.2785, 0.048319, 3180.9},
@@ -741,10 +742,12 @@ private:
         // B(OH)3, see boricAcidSpecificVolume_
         {unused_, unused_, unused_, unused_, unused_},
     }};
+    // clang-format on
 
     // Viscosity coefficients v1 to v6 in Electrolyte order. The first seven are from
     // Laliberte, J. Chem. Eng. Data 52 (2), 2007 and its correction, J. Chem. Eng. Data 52 (4),
     // 2007; the rest from Laliberte, J. Chem. Eng. Data 54, 2009, Supporting Information.
+    // clang-format off
     static constexpr std::array<std::array<Scalar, 6>, numElectrolytes> cVisc = {{
         // CaCl2
         {32.028, 0.78792, -1.1495, 0.0026995, 780860, 5.8442},
@@ -790,6 +793,7 @@ private:
         // B(OH)3, not used
         {unused_, unused_, unused_, unused_, unused_, unused_},
     }};
+    // clang-format on
 };
 
 } // namespace Opm

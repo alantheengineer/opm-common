@@ -45,6 +45,7 @@ class SaltElectrolytes
 {
 public:
     /// Supported electrolytes for Laliberte viscosity and Laliberte-Cooper density
+    // clang-format off
     enum class Electrolyte
     {
         CaCl2, KCl, K2SO4, MgCl2, MgSO4, NaCl, Na2SO4,
@@ -52,6 +53,7 @@ public:
         BOH3, // boric acid, a neutral solute
         NUM // Must be last: the number of electrolytes
     };
+    // clang-format on
 
     static constexpr std::size_t numElectrolytes = static_cast<std::size_t>(Electrolyte::NUM);
 
@@ -72,6 +74,7 @@ public:
     };
 
     /// Every supported electrolyte, in Electrolyte order
+    // clang-format off
     static constexpr std::array<Pairing, numElectrolytes> pairings = {{
         {Electrolyte::CaCl2, SaltIndex::CA, 1, SaltIndex::CL, 2},
         {Electrolyte::KCl, SaltIndex::K, 1, SaltIndex::CL, 1},
@@ -91,6 +94,7 @@ public:
         {Electrolyte::K2CO3, SaltIndex::K, 2, SaltIndex::CO3, 1},
         {Electrolyte::BOH3, SaltIndex::B, 1, SaltIndex::B, 0},
     }};
+    // clang-format on
 
     static constexpr bool isNeutral(const Pairing& p)
     {
@@ -158,7 +162,6 @@ public:
     static constexpr Scalar molalTolerance = 1e-6; ///< tolerance for molality calculations
 
 private:
-
     /*!
      * Generate electrolytes (in molality) from salt ion molalities
      *
@@ -238,7 +241,7 @@ private:
             const Evaluation electrolyteMolal = min(cation / p.cationsPer, anion / p.anionsPer);
             cation -= electrolyteMolal * p.cationsPer;
             anion -= electrolyteMolal * p.anionsPer;
-            return std::pair<Electrolyte, Evaluation>{p.electrolyte, electrolyteMolal};
+            return std::pair<Electrolyte, Evaluation> {p.electrolyte, electrolyteMolal};
         }
         return std::nullopt;
     }
@@ -249,8 +252,7 @@ private:
      * @param electrolyte Electrolytes and their molality
      */
     template <class Evaluation>
-    static void
-    molalToMassFrac_(ElectrolyteList<Evaluation>& electrolyte)
+    static void molalToMassFrac_(ElectrolyteList<Evaluation>& electrolyte)
     {
         Evaluation sum = 1.0;
         for (auto& salt : electrolyte) {

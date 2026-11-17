@@ -164,19 +164,30 @@ void addSaltMassFraction(Opm::SaltArray<Evaluation, Opm::SaltMassFraction>& salt
 }
 
 template <class Electrolyte>
-std::string electrolyteName(const Electrolyte e)
+std::string
+electrolyteName(const Electrolyte e)
 {
     switch (e) {
-    case Electrolyte::LiCl: return "LiCl";
-    case Electrolyte::Li2SO4: return "Li2SO4";
-    case Electrolyte::SrCl2: return "SrCl2";
-    case Electrolyte::NaBr: return "NaBr";
-    case Electrolyte::KBr: return "KBr";
-    case Electrolyte::NaHCO3: return "NaHCO3";
-    case Electrolyte::Na2CO3: return "Na2CO3";
-    case Electrolyte::KHCO3: return "KHCO3";
-    case Electrolyte::K2CO3: return "K2CO3";
-    default: return "";
+    case Electrolyte::LiCl:
+        return "LiCl";
+    case Electrolyte::Li2SO4:
+        return "Li2SO4";
+    case Electrolyte::SrCl2:
+        return "SrCl2";
+    case Electrolyte::NaBr:
+        return "NaBr";
+    case Electrolyte::KBr:
+        return "KBr";
+    case Electrolyte::NaHCO3:
+        return "NaHCO3";
+    case Electrolyte::Na2CO3:
+        return "Na2CO3";
+    case Electrolyte::KHCO3:
+        return "KHCO3";
+    case Electrolyte::K2CO3:
+        return "K2CO3";
+    default:
+        return "";
     }
 }
 
@@ -980,8 +991,8 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMgSO4Density, Scalar, Types)
 
     // MgSO4 brine at 25 C from the Laliberte (2009) refit, as computed by the thermo
     // package. The 2004 coefficients used here agree with it to 2e-4.
-    const std::array<std::pair<Scalar, Scalar>, 3> massFracAndDensity = {{
-        {0.05, 1048.393548}, {0.10, 1101.900901}, {0.20, 1217.713645}}};
+    const std::array<std::pair<Scalar, Scalar>, 3> massFracAndDensity
+        = {{{0.05, 1048.393548}, {0.10, 1101.900901}, {0.20, 1217.713645}}};
 
     Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
     for (const auto& [w, ref] : massFracAndDensity) {
@@ -1017,8 +1028,8 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009Electrolytes, Scalar, Types)
         const std::string name = electrolyteName(pairing.electrolyte);
         const Json::JsonObject data = reference.get_item(name);
         const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
-        const Scalar cationShare =
-            pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
+        const Scalar cationShare
+            = pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
 
         for (const std::string prop : {"density", "viscosity"}) {
             const Json::JsonObject points = data.get_item(prop);
@@ -1057,8 +1068,8 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
             continue;
         }
         const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
-        const Scalar cationShare =
-            pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
+        const Scalar cationShare
+            = pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
         Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
         saltArray[pairing.cation] = w * cationShare;
         saltArray[pairing.anion] = w * (1 - cationShare);
@@ -1067,9 +1078,10 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
             const Evaluation temp(T);
             const Scalar mu = BrineDyn::liquidViscosityMulticompSalt(temp, saltArray).value();
             const Scalar muW = BrineDyn::liquidViscosityMulticompSalt(temp, water).value();
-            BOOST_CHECK_MESSAGE(mu / muW > 0.95 && mu / muW < 1.4,
-                                "relative viscosity " << mu / muW << " for electrolyte "
-                                << static_cast<int>(pairing.electrolyte) << " at T = " << T);
+            const Scalar ratio = mu / muW;
+            const auto index = static_cast<int>(pairing.electrolyte);
+            BOOST_CHECK_MESSAGE(ratio > 0.95 && ratio < 1.4,
+                                "electrolyte " << index << " at T = " << T << ": " << ratio);
         }
     }
 }

@@ -353,10 +353,10 @@ BOOST_AUTO_TEST_CASE(IonTableTests)
         molal[static_cast<SaltIndex>(i)] = 1.0;
     }
     const auto [cations, anions] = molal.cations_and_anions();
-    const std::vector<SaltIndex> expectedCations = {SaltIndex::CA, SaltIndex::MG, SaltIndex::SR,
-                                                    SaltIndex::NA, SaltIndex::K, SaltIndex::LI};
-    const std::vector<SaltIndex> expectedAnions = {SaltIndex::SO4, SaltIndex::CO3, SaltIndex::CL,
-                                                   SaltIndex::BR, SaltIndex::HCO3};
+    const std::vector<SaltIndex> expectedCations
+        = {SaltIndex::CA, SaltIndex::MG, SaltIndex::SR, SaltIndex::NA, SaltIndex::K, SaltIndex::LI};
+    const std::vector<SaltIndex> expectedAnions
+        = {SaltIndex::SO4, SaltIndex::CO3, SaltIndex::CL, SaltIndex::BR, SaltIndex::HCO3};
     BOOST_CHECK(std::vector<SaltIndex>(cations.begin(), cations.end()) == expectedCations);
     BOOST_CHECK(std::vector<SaltIndex>(anions.begin(), anions.end()) == expectedAnions);
 }

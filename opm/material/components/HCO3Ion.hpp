@@ -37,7 +37,7 @@ namespace Opm
  * \tparam Scalar The type used for scalar values
  */
 template <class Scalar>
-class HCO3Ion : public Component<Scalar, HCO3Ion<Scalar> >
+class HCO3Ion : public Component<Scalar, HCO3Ion<Scalar>>
 {
 public:
     /*!
@@ -57,6 +57,6 @@ public:
     }
 };
 
-}
+} // namespace Opm
 
-#endif //OPM_HCO3ION_HPP
+#endif // OPM_HCO3ION_HPP

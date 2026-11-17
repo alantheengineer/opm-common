@@ -37,7 +37,7 @@ namespace Opm
  * \tparam Scalar The type used for scalar values
  */
 template <class Scalar>
-class BrIon : public Component<Scalar, BrIon<Scalar> >
+class BrIon : public Component<Scalar, BrIon<Scalar>>
 {
 public:
     /*!
@@ -57,6 +57,6 @@ public:
     }
 };
 
-}
+} // namespace Opm
 
-#endif //OPM_BRION_HPP
+#endif // OPM_BRION_HPP
