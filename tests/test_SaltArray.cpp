@@ -18,8 +18,15 @@
  */
 #include <config.h>
 
+#include <opm/common/utility/MemPacker.hpp>
 #include <opm/common/utility/SaltArray.hpp>
+#include <opm/common/utility/Serializer.hpp>
 #include <opm/material/densead/Evaluation.hpp>
+
+#include <array>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #define BOOST_TEST_MODULE SaltArrayTests
 #include <boost/mpl/list.hpp>
@@ -270,4 +277,86 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(CationAnionTests, Eval, EvalTypes)
     // Anions in descending ion strength
     BOOST_CHECK(anions3[0] == SaltIndex::SO4);
     BOOST_CHECK(anions3[1] == SaltIndex::CL);
+}
+
+namespace
+{
+// Writes the layout of a SaltArray that held only the first `count` ions.
+struct ShorterSaltArray
+{
+    std::size_t count = 0;
+    double value = 0.0;
+
+    template <class Serializer>
+    void serializeOp(Serializer& serializer)
+    {
+        serializer(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            double v = value * static_cast<double>(i + 1);
+            serializer(v);
+        }
+    }
+};
+} // namespace
+
+BOOST_AUTO_TEST_CASE(SerializationTests)
+{
+    SaltArray<double, SaltMassFraction> in;
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        in[static_cast<SaltIndex>(i)] = 0.01 * static_cast<double>(i + 1);
+    }
+    Serialization::MemPacker packer;
+    Serializer ser(packer);
+    ser.pack(in);
+    SaltArray<double, SaltMassFraction> out;
+    ser.unpack(out);
+    BOOST_CHECK(in == out);
+
+    // Data written when SaltIndex was shorter loads, with the missing ions zero
+    const std::size_t count = in.size() - 2;
+    ShorterSaltArray older {count, 0.01};
+    ser.pack(older);
+    ser.unpack(out);
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const double expected = i < count ? 0.01 * static_cast<double>(i + 1) : 0.0;
+        BOOST_CHECK_EQUAL(out[static_cast<SaltIndex>(i)], expected);
+    }
+
+    // More ions than SaltIndex holds is refused
+    ShorterSaltArray newer {in.size() + 1, 0.01};
+    ser.pack(newer);
+    BOOST_CHECK_THROW(ser.unpack(out), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(IonTableTests)
+{
+    // Charges, names and categories of the ions added after SO4
+    const std::array<std::tuple<std::string, SaltIndex, short, IonType>, 6> ions = {{
+        {"LI", SaltIndex::LI, 1, IonType::Cation},
+        {"SR", SaltIndex::SR, 2, IonType::Cation},
+        {"BR", SaltIndex::BR, -1, IonType::Anion},
+        {"HCO3", SaltIndex::HCO3, -1, IonType::Anion},
+        {"CO3", SaltIndex::CO3, -2, IonType::Anion},
+        {"B", SaltIndex::B, 0, IonType::Neutral},
+    }};
+    for (const auto& [name, index, charge, type] : ions) {
+        BOOST_CHECK(saltIndexFromString(name) == index);
+        BOOST_CHECK_EQUAL(ionStrength(index), charge);
+        BOOST_CHECK(categorizeIon(index) == type);
+        BOOST_CHECK(saltMolarMass<double>(index) > 0.0);
+    }
+    BOOST_CHECK_EQUAL(numSaltIons, 12U);
+
+    // Equal charges keep SaltIndex order; boron is in neither list
+    SaltArray<double, SaltMolality> molal;
+    for (std::size_t i = 0; i < molal.size(); ++i) {
+        molal[static_cast<SaltIndex>(i)] = 1.0;
+    }
+    const auto [cations, anions] = molal.cations_and_anions();
+    const std::vector<SaltIndex> expectedCations
+        = {SaltIndex::CA, SaltIndex::MG, SaltIndex::SR, SaltIndex::NA, SaltIndex::K, SaltIndex::LI};
+    const std::vector<SaltIndex> expectedAnions
+        = {SaltIndex::SO4, SaltIndex::CO3, SaltIndex::CL, SaltIndex::BR, SaltIndex::HCO3};
+    BOOST_CHECK(std::vector<SaltIndex>(cations.begin(), cations.end()) == expectedCations);
+    BOOST_CHECK(std::vector<SaltIndex>(anions.begin(), anions.end()) == expectedAnions);
 }

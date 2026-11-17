@@ -1,5 +1,6 @@
 /*
   Copyright 2026 NORCE.
+  Copyright 2026 Dr Alan Tominey.
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -22,20 +23,26 @@
 #include <opm/input/eclipse/Deck/DeckRecord.hpp>
 
 #include <opm/common/ErrorMacros.hpp>
+#include <opm/common/utility/FixedCapacityList.hpp>
 #include <opm/common/utility/gpuDecorators.hpp>
 
+#include <opm/material/components/BOH3.hpp>
+#include <opm/material/components/BrIon.hpp>
+#include <opm/material/components/CO3Ion.hpp>
 #include <opm/material/components/CaIon.hpp>
 #include <opm/material/components/ClIon.hpp>
+#include <opm/material/components/HCO3Ion.hpp>
 #include <opm/material/components/KIon.hpp>
+#include <opm/material/components/LiIon.hpp>
 #include <opm/material/components/MgIon.hpp>
 #include <opm/material/components/NaIon.hpp>
 #include <opm/material/components/SO4Ion.hpp>
+#include <opm/material/components/SrIon.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
-#include <numeric>
+#include <utility>
 
 namespace Opm
 {
@@ -57,18 +64,28 @@ struct SaltMoleFraction
 template <class FromSaltUnit, class ToSaltUnit>
 struct SaltUnitConverter;
 
-/// Salt ion indices for SaltArray
+/// Salt ion indices for SaltArray. New ions go at the end so that serialized arrays keep
+/// their meaning. B is total dissolved boron, carried as B(OH)3.
+// clang-format off
 enum class SaltIndex : std::size_t
 {
     NA, K, CA, MG, CL, SO4,
+    LI, SR, BR, HCO3, CO3, B,
     NCOMP // DO NOT CHANGE! Must be the last enum to set size of SaltArray!
 };
+// clang-format on
 
-/// Enum for classifying cations and anions
-enum class IonType
-{
-    Cation, Anion
-};
+/// Number of salt ions in SaltIndex
+inline constexpr std::size_t numSaltIons = static_cast<std::size_t>(SaltIndex::NCOMP);
+
+/// Largest ion charge in SaltIndex, by absolute value
+inline constexpr short maxIonCharge = 2;
+
+/// Salt ion indices held without heap allocation
+using SaltIndexList = FixedCapacityList<SaltIndex, numSaltIons>;
+
+/// Enum for classifying cations, anions and neutral solutes
+enum class IonType { Cation, Anion, Neutral };
 
 /*!
  * Converts ion string name to index
@@ -97,6 +114,24 @@ saltIndexFromString(const std::string& s)
     if (s == "SO4") {
         return SaltIndex::SO4;
     }
+    if (s == "LI") {
+        return SaltIndex::LI;
+    }
+    if (s == "SR") {
+        return SaltIndex::SR;
+    }
+    if (s == "BR") {
+        return SaltIndex::BR;
+    }
+    if (s == "HCO3") {
+        return SaltIndex::HCO3;
+    }
+    if (s == "CO3") {
+        return SaltIndex::CO3;
+    }
+    if (s == "B") {
+        return SaltIndex::B;
+    }
     throw std::invalid_argument("SaltIndex not valid!");
 }
 
@@ -114,10 +149,17 @@ categorizeIon(const SaltIndex s)
     case SaltIndex::NA:
     case SaltIndex::MG:
     case SaltIndex::K:
+    case SaltIndex::LI:
+    case SaltIndex::SR:
         return IonType::Cation;
     case SaltIndex::CL:
     case SaltIndex::SO4:
+    case SaltIndex::BR:
+    case SaltIndex::HCO3:
+    case SaltIndex::CO3:
         return IonType::Anion;
+    case SaltIndex::B:
+        return IonType::Neutral;
     default:
         throw std::runtime_error("Unknown SaltIndex");
     }
@@ -145,6 +187,18 @@ ionStrength(const SaltIndex s)
         return -1;
     case SaltIndex::SO4:
         return -2;
+    case SaltIndex::LI:
+        return 1;
+    case SaltIndex::SR:
+        return 2;
+    case SaltIndex::BR:
+        return -1;
+    case SaltIndex::HCO3:
+        return -1;
+    case SaltIndex::CO3:
+        return -2;
+    case SaltIndex::B:
+        return 0;
     default:
         throw std::runtime_error("Unknown SaltIndex");
     }
@@ -173,6 +227,18 @@ saltMolarMass(const SaltIndex ind)
         return MgIon<Scalar>::molarMass();
     case SaltIndex::SO4:
         return SO4Ion<Scalar>::molarMass();
+    case SaltIndex::LI:
+        return LiIon<Scalar>::molarMass();
+    case SaltIndex::SR:
+        return SrIon<Scalar>::molarMass();
+    case SaltIndex::BR:
+        return BrIon<Scalar>::molarMass();
+    case SaltIndex::HCO3:
+        return HCO3Ion<Scalar>::molarMass();
+    case SaltIndex::CO3:
+        return CO3Ion<Scalar>::molarMass();
+    case SaltIndex::B:
+        return BOH3<Scalar>::molarMass();
     default:
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
         assert(false && "SaltIndex not valid!");
@@ -194,9 +260,9 @@ template <class T, class SaltUnit>
 class SaltArray
 {
 public:
-    using SaltIndexPair = std::pair<std::vector<SaltIndex>, std::vector<SaltIndex> >;
+    using SaltIndexPair = std::pair<SaltIndexList, SaltIndexList>;
 
-    static constexpr std::size_t ncomp = static_cast<std::size_t>(SaltIndex::NCOMP);
+    static constexpr std::size_t ncomp = numSaltIons;
 
     /*!
      * Default constructor
@@ -229,7 +295,7 @@ public:
      */
     void assignFromDeckRecord(const DeckRecord& record)
     {
-        assert(record.size() == saltData_.size());
+        assert(record.size() <= saltData_.size());
         for (const auto& item : record) {
             auto recItem = static_cast<T>(item.get<double>(0));
             auto index = saltIndexFromString(item.name());
@@ -383,46 +449,30 @@ public:
     }
 
     /*!
-     * Get cations and anions of non-zero ions in descending ion strength
+     * Get cations and anions of non-zero ions, cations by falling charge and anions by
+     * rising charge. Ions of equal charge keep their SaltIndex order. Neutral solutes are
+     * in neither list.
      *
-     * @return Pair of cation and anion vectors
+     * @return Pair of cation and anion lists
      */
     [[nodiscard]] SaltIndexPair cations_and_anions() const
     {
-        std::vector<std::pair<short, SaltIndex> > cations;
-        std::vector<std::pair<short, SaltIndex> > anions;
-        cations.reserve(size());
-        anions.reserve(size());
-        for (std::size_t i = 0; i < size(); ++i) {
-            auto ind = static_cast<SaltIndex>(i);
-            auto ionStr = ionStrength(ind);
-            if ((*this)[ind] != T{}) {
-                if (categorizeIon(ind) == IonType::Cation) {
-                    cations.emplace_back(ionStr, ind);
-
-                } else {
-                    anions.emplace_back(ionStr, ind);
+        SaltIndexPair ions;
+        for (short z = maxIonCharge; z > 0; --z) {
+            for (std::size_t i = 0; i < size(); ++i) {
+                const auto ind = static_cast<SaltIndex>(i);
+                if (saltData_[i] == T {}) {
+                    continue;
+                }
+                const auto charge = ionStrength(ind);
+                if (charge == z) {
+                    ions.first.push_back(ind);
+                } else if (charge == -z) {
+                    ions.second.push_back(ind);
                 }
             }
         }
-
-        // Sort by ion strength: descending for cations, ascending for anions
-        std::ranges::sort(cations, std::ranges::greater{}, &std::pair<short, SaltIndex>::first);
-        std::ranges::sort(anions, {}, &std::pair<short, SaltIndex>::first);
-
-        // Return only cations and anions SaltIndex
-        std::vector<SaltIndex> cationIndex;
-        std::vector<SaltIndex> anionIndex;
-        cationIndex.reserve(cations.size());
-        anionIndex.reserve(anions.size());
-        std::ranges::transform(cations,
-                               std::back_inserter(cationIndex),
-                               &std::pair<short, SaltIndex>::second);
-        std::ranges::transform(anions,
-                               std::back_inserter(anionIndex),
-                               &std::pair<short, SaltIndex>::second);
-
-        return {cationIndex, anionIndex};
+        return ions;
     }
 
     /*!
@@ -437,10 +487,24 @@ public:
         return SaltUnitConverter<SaltUnit, NewSaltUnit>::template convert<T>(*this);
     }
 
+    /*!
+     * The ion count goes first, so data written before ions were appended to SaltIndex still
+     * loads, with the ions it lacks set to zero.
+     */
     template <class Serializer>
     void serializeOp(Serializer& serializer)
     {
-        serializer(saltData_);
+        std::size_t count = ncomp;
+        serializer(count);
+        if (count > ncomp) {
+            OPM_THROW(std::runtime_error, "Serialized SaltArray has more ions than SaltIndex");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            serializer(saltData_[i]);
+        }
+        for (std::size_t i = count; i < ncomp; ++i) {
+            saltData_[i] = T {};
+        }
     }
 
 private:
