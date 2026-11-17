@@ -171,7 +171,7 @@ categorizeIon(const SaltIndex s)
  * @param s Index of salt ion
  * @return Ion strength
  */
-inline short
+inline constexpr short
 ionStrength(const SaltIndex s)
 {
     switch (s) {
@@ -203,6 +203,24 @@ ionStrength(const SaltIndex s)
         throw std::runtime_error("Unknown SaltIndex");
     }
 }
+
+namespace detail
+{
+    constexpr std::size_t countSaltIons(const short sign)
+    {
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < numSaltIons; ++i) {
+            if (ionStrength(static_cast<SaltIndex>(i)) * sign > 0) {
+                ++n;
+            }
+        }
+        return n;
+    }
+} // namespace detail
+
+/// Number of cation and anion species in SaltIndex
+inline constexpr std::size_t numSaltCations = detail::countSaltIons(1);
+inline constexpr std::size_t numSaltAnions = detail::countSaltIons(-1);
 
 /*!
  * Get molar mass of salt ion

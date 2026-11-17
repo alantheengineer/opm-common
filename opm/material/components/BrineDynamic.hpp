@@ -56,6 +56,7 @@ template <class Scalar, class H2O>
 class BrineDynamic : public Component<Scalar, BrineDynamic<Scalar, H2O> >
 {
 public:
+    using PairingMethod = typename SaltElectrolytes<Scalar>::PairingMethod;
 
     /*!
      * \copydoc Component::name
@@ -371,6 +372,7 @@ public:
      *        (pressure dependent) instead of the Laliberte & Cooper correlation
      *        (pressure independent)
      * @param extrapolate True to use extrapolation, only used if useH2ODensity is true
+     * @param pairing How ions are paired into electrolytes
      * @return Brine density [kg/m3]
      */
     template <class Evaluation>
@@ -379,7 +381,8 @@ public:
                                const Evaluation& pressure,
                                const SaltArray<Evaluation, SaltMassFraction>& salinity,
                                bool useH2ODensity = false,
-                               bool extrapolate = false)
+                               bool extrapolate = false,
+                               PairingMethod pairing = PairingMethod::Proportional)
     {
         // Density of pure water
         const Evaluation rhow = useH2ODensity
@@ -390,7 +393,7 @@ public:
         if (!salinity.any_nonzero()) {
             return rhow;
         }
-        return liquidDensityLaliberteCooper(temperature, salinity, rhow);
+        return liquidDensityLaliberteCooper(temperature, salinity, rhow, pairing);
     }
 
     /*!
@@ -401,13 +404,15 @@ public:
      * @param temperature Temperature [K]
      * @param salinity Array of salt ions [kg ion/kg water]
      * @param rhow Density pure water [kg/m3]
+     * @param pairing How ions are paired into electrolytes
      * @return Brine density [kg/m3]
      */
     template <class Evaluation>
     OPM_HOST_DEVICE static Evaluation
     liquidDensityLaliberteCooper(const Evaluation& temperature,
                                  const SaltArray<Evaluation, SaltMassFraction>& salinity,
-                                 const Evaluation& rhow)
+                                 const Evaluation& rhow,
+                                 PairingMethod pairing = PairingMethod::Proportional)
     {
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
         // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) throws on unknown
@@ -416,7 +421,7 @@ public:
         return rhow;
 #else
         // Generate (valid) electrolytes from salt components
-        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
 
         // Sum of electrolyte mass fractions
         // OBS: If there are residual salt molalities when generating electrolytes, sumSalinity
@@ -532,12 +537,14 @@ public:
      *
      * @param temperature Temperature [K]
      * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
      * @return Viscosity of brine [Pa*s]
      */
     template <class Evaluation>
     OPM_HOST_DEVICE static Evaluation
     liquidViscosityMulticompSalt(const Evaluation& temperature,
-                                 const SaltArray<Evaluation, SaltMassFraction>& salinity)
+                                 const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                 PairingMethod pairing = PairingMethod::Proportional)
     {
         // Pure water viscosity
         const Evaluation muW = liquidViscosityPureWaterLaliberte_(temperature);
@@ -547,25 +554,27 @@ public:
             return muW * 1e-3;
         }
 
-        return liquidViscosityLaliberte(temperature, salinity, muW);
+        return liquidViscosityLaliberte(temperature, salinity, muW, pairing);
     }
 
     /*!
      * Viscosity of liquid brine using multicomponent salts from Laliberte, Journal of Chemical
      * and Engineering Data, Vol. 52, No. 2, 2007 and corrections paper Laliberte, Journal of
-    * Chemical and Engineering Data, Vol. 52, No. 4, 2007 (all equations refs. are from these
-    * papers).
+     * Chemical and Engineering Data, Vol. 52, No. 4, 2007 (all equations refs. are from these
+     * papers).
      *
      * @param temperature Temperature [K]
      * @param salinity Array of salt ions [kg ion/kg water]
      * @param muW Viscosity of pure water [mPa*s]
+     * @param pairing How ions are paired into electrolytes
      * @return Viscosity of brine [Pa*s]
      */
     template <class Evaluation>
     OPM_HOST_DEVICE static Evaluation
     liquidViscosityLaliberte(const Evaluation& temperature,
                              const SaltArray<Evaluation, SaltMassFraction>& salinity,
-                             const Evaluation& muW)
+                             const Evaluation& muW,
+                             PairingMethod pairing = PairingMethod::Proportional)
     {
 #if OPM_IS_INSIDE_DEVICE_FUNCTION
         // Electrolyte speciation (SaltElectrolytes::fromSaltComponents) throws on unknown
@@ -574,7 +583,7 @@ public:
         return muW * 1e-3;
 #else
         // Generate (valid) electrolytes from salt components
-        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
 
         // Sum of electrolyte mass fractions
         // OBS: If there are residual salt molalities when generating electrolytes, sumSalinity
