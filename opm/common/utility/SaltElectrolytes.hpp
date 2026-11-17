@@ -49,6 +49,7 @@ public:
     {
         CaCl2, KCl, K2SO4, MgCl2, MgSO4, NaCl, Na2SO4,
         LiCl, Li2SO4, SrCl2, NaBr, KBr, NaHCO3, Na2CO3, KHCO3, K2CO3,
+        BOH3, // boric acid, a neutral solute
         NUM // Must be last: the number of electrolytes
     };
 
@@ -59,7 +60,8 @@ public:
     template <class Evaluation>
     using ElectrolyteList = FixedCapacityList<std::pair<Electrolyte, Evaluation>, numElectrolytes>;
 
-    /// An electrolyte and the moles of cation and anion in one mole of it
+    /// An electrolyte and the moles of cation and anion in one mole of it. A neutral
+    /// solute lists its own component as the cation and has no anion.
     struct Pairing
     {
         Electrolyte electrolyte;
@@ -69,7 +71,7 @@ public:
         Scalar anionsPer;
     };
 
-    /// Every supported cation-anion pair, in Electrolyte order
+    /// Every supported electrolyte, in Electrolyte order
     static constexpr std::array<Pairing, numElectrolytes> pairings = {{
         {Electrolyte::CaCl2, SaltIndex::CA, 1, SaltIndex::CL, 2},
         {Electrolyte::KCl, SaltIndex::K, 1, SaltIndex::CL, 1},
@@ -87,7 +89,13 @@ public:
         {Electrolyte::Na2CO3, SaltIndex::NA, 2, SaltIndex::CO3, 1},
         {Electrolyte::KHCO3, SaltIndex::K, 1, SaltIndex::HCO3, 1},
         {Electrolyte::K2CO3, SaltIndex::K, 2, SaltIndex::CO3, 1},
+        {Electrolyte::BOH3, SaltIndex::B, 1, SaltIndex::B, 0},
     }};
+
+    static constexpr bool isNeutral(const Pairing& p)
+    {
+        return p.anionsPer == 0;
+    }
 
     static constexpr bool pairingsInElectrolyteOrder()
     {
@@ -187,6 +195,15 @@ private:
             }
         }
 
+        // Neutral solutes need no partner
+        for (const auto& p : pairings) {
+            auto& molal = molalSalinity[p.cation];
+            if (isNeutral(p) && molal >= molalTolerance) {
+                electrolytes.push_back({p.electrolyte, molal});
+                molal = 0.0;
+            }
+        }
+
         return electrolytes;
     }
 
@@ -215,7 +232,7 @@ private:
                                   Evaluation& anion)
     {
         for (const auto& p : pairings) {
-            if (p.cation != cationIdx || p.anion != anionIdx) {
+            if (isNeutral(p) || p.cation != cationIdx || p.anion != anionIdx) {
                 continue;
             }
             const Evaluation electrolyteMolal = min(cation / p.cationsPer, anion / p.anionsPer);

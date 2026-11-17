@@ -37,6 +37,7 @@
 #include <cassert>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <numeric>
 #include <span>
 #include <string_view>
@@ -428,6 +429,11 @@ public:
         Evaluation tempC = temperature - 273.15;
         Evaluation sumAppVolTimesMf = 0.0;
         for (const auto& salt : electrolytes) {
+            if (salt.first == Electrolyte::BOH3) {
+                sumAppVolTimesMf += salt.second * boricAcidSpecificVolume_(temperature);
+                continue;
+            }
+
             // Get constants
             const auto c = densityCoefficients(salt.first);
 
@@ -581,6 +587,12 @@ public:
         Evaluation tempC = temperature - 273.15;
         Evaluation lnMuMix = 0.0;
         for (const auto& salt : electrolytes) {
+            // Laliberte gives no viscosity set for boric acid, so it counts as water
+            if (salt.first == Electrolyte::BOH3) {
+                lnMuMix += salt.second * log(muW);
+                continue;
+            }
+
             // Get constants
             const auto v = viscosityCoefficients(salt.first);
 
@@ -665,6 +677,24 @@ private:
         return (tempC + 246.0) / ((0.05594 * tempC + 5.2842) * tempC + 137.37);
     }
 
+    /*!
+     * Apparent specific volume of dissolved boric acid. The apparent molar volume is a line
+     * in T fitted to the infinite-dilution values of Abdulagatov and Azizov, J. Solution Chem.
+     * 33, 2004, Table VII, from 296 to 523 K. They found pressure and concentration effects
+     * small below 500 K, so both are ignored.
+     *
+     * @param temperature Temperature [K]
+     * @return Apparent specific volume [m3/kg]
+     */
+    template <class Evaluation>
+    static Evaluation boricAcidSpecificVolume_(const Evaluation& temperature)
+    {
+        const Evaluation molarVolume = (30.882 + 0.031814 * temperature) * 1e-6; // m3/mol
+        return molarVolume / saltMolarMass<Scalar>(SaltIndex::B);
+    }
+
+    static constexpr Scalar unused_ = std::numeric_limits<Scalar>::quiet_NaN();
+
     // Density coefficients c0 to c4 in Electrolyte order. The first seven are from Laliberte
     // and Cooper, J. Chem. Eng. Data 49, 2004, Table 3; the rest from the refit in Laliberte,
     // J. Chem. Eng. Data 54, 2009, Supporting Information.
@@ -708,6 +738,8 @@ private:
         // K2CO3
         {2290.10867876218, 1038.77363895405, 0.109769327294915, 0.000497783340935823,
          -74.0786862142127},
+        // B(OH)3, see boricAcidSpecificVolume_
+        {unused_, unused_, unused_, unused_, unused_},
     }};
 
     // Viscosity coefficients v1 to v6 in Electrolyte order. The first seven are from
@@ -755,6 +787,8 @@ private:
         // K2CO3
         {41.3874564880263, 3.67791349310373, 3.26807400039543, 0.00876702412403997,
          8684.04398141182, 12.7276295460364},
+        // B(OH)3, not used
+        {unused_, unused_, unused_, unused_, unused_, unused_},
     }};
 };
 

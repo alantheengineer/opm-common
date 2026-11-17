@@ -79,6 +79,9 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(MolarMassTests, Eval, EvalTypes)
     BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::K2CO3),
                        static_cast<Scalar>(138.21e-3),
                        static_cast<Scalar>(0.01));
+    BOOST_CHECK_CLOSE(SaltElectrolytes<Scalar>::molarMass(Electrolyte::BOH3),
+                       static_cast<Scalar>(61.83e-3),
+                       static_cast<Scalar>(0.01));
 }
 
 BOOST_AUTO_TEST_CASE_TEMPLATE(ZeroSalinityTests, Eval, EvalTypes)
@@ -123,13 +126,14 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(SingleElectrolyteTests, Eval, EvalTypes)
         {SaltIndex::NA, 1.4, SaltIndex::CO3, 0.7, Electrolyte::Na2CO3},
         {SaltIndex::K,  0.7, SaltIndex::HCO3, 0.7, Electrolyte::KHCO3},
         {SaltIndex::K,  1.4, SaltIndex::CO3, 0.7, Electrolyte::K2CO3},
+        {SaltIndex::B,  0.7, SaltIndex::B, 0.0, Electrolyte::BOH3},
     };
     BOOST_CHECK_EQUAL(cases.size(), SaltElectrolytes<Scalar>::numElectrolytes);
 
     for (const auto& c : cases) {
         SaltArray<Eval, SaltMolality> molal;
-        molal[c.cationIdx] = c.cationMolal;
-        molal[c.anionIdx] = c.anionMolal;
+        molal[c.cationIdx] += c.cationMolal;
+        molal[c.anionIdx] += c.anionMolal;
         SaltArray<Eval, SaltMassFraction> salinity = molal.template convert_to<SaltMassFraction>();
 
         auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
@@ -260,14 +264,15 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BasinBrineTests, Eval, EvalTypes)
     const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
     const std::vector<Electrolyte> expected = {
         Electrolyte::MgSO4, Electrolyte::Na2CO3, Electrolyte::CaCl2, Electrolyte::MgCl2,
-        Electrolyte::SrCl2, Electrolyte::NaCl, Electrolyte::KCl, Electrolyte::KBr};
+        Electrolyte::SrCl2, Electrolyte::NaCl, Electrolyte::KCl, Electrolyte::KBr,
+        Electrolyte::BOH3};
     BOOST_REQUIRE_EQUAL(electrolytes.size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
         BOOST_CHECK(electrolytes[i].first == expected[i]);
     }
 
-    // Cl runs out before Li, which has no Br or HCO3 pairing, and boron is neutral. Left
-    // unpaired: 0.03 Li, 0.025 Br, 0.005 HCO3 and 0.01 B.
+    // Cl runs out before Li, which has no Br or HCO3 pairing. Boron needs no partner. Left
+    // unpaired: 0.03 Li, 0.025 Br and 0.005 HCO3.
     const auto unpaired = SaltElectrolytes<Scalar>::unpairedMolality(salinity);
-    BOOST_CHECK_CLOSE(scalarValue(unpaired), static_cast<Scalar>(0.07), static_cast<Scalar>(0.1));
+    BOOST_CHECK_CLOSE(scalarValue(unpaired), static_cast<Scalar>(0.06), static_cast<Scalar>(0.1));
 }

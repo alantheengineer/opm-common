@@ -1011,6 +1011,9 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009Electrolytes, Scalar, Types)
         if (e < static_cast<std::size_t>(Electrolytes::Electrolyte::LiCl)) {
             continue; // the first seven use the 2004 and 2007 coefficient sets
         }
+        if (Electrolytes::isNeutral(pairing)) {
+            continue; // boric acid is not in the 2009 set
+        }
         const std::string name = electrolyteName(pairing.electrolyte);
         const Json::JsonObject data = reference.get_item(name);
         const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
@@ -1050,6 +1053,9 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
     const Scalar w = 0.05;
     const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
     for (const auto& pairing : Electrolytes::pairings) {
+        if (Electrolytes::isNeutral(pairing)) {
+            continue;
+        }
         const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
         const Scalar cationShare =
             pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
@@ -1066,6 +1072,36 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
                                 << static_cast<int>(pairing.electrolyte) << " at T = " << T);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineBoricAcid, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::SimpleHuDuanH2O<Scalar>>;
+
+    // 0.5 mol/kg B(OH)3 at 25 C. Reference volume from Ward and Millero, J. Solution Chem. 3,
+    // 1974: 36.56 + 0.13 t - 0.00081 t^2 cm3/mol at t = 25 C.
+    const Scalar m = 0.5;
+    const Scalar mm = Opm::saltMolarMass<Scalar>(Opm::SaltIndex::B);
+    const Scalar molarVolume = (36.56 + 0.13 * 25.0 - 0.00081 * 625.0) * 1e-6;
+    const Evaluation T(298.15);
+    const Evaluation p(101325.0);
+
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::B] = m;
+    const auto saltArray = molal.template convert_to<Opm::SaltMassFraction>();
+
+    const Scalar rhoW = BrineDyn::liquidDensityMulticompSalt(T, p, water).value();
+    const Scalar ref = (1 + m * mm) / (1 / rhoW + m * molarVolume);
+    const Scalar rho = BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value();
+    BOOST_CHECK_MESSAGE(close_at_tolerance(rho, ref, Scalar(1e-3)),
+                        "boric acid density " << rho << " against " << ref);
+
+    // Boric acid has no Laliberte viscosity set and counts as water
+    const Scalar mu = BrineDyn::liquidViscosityMulticompSalt(T, saltArray).value();
+    const Scalar muW = BrineDyn::liquidViscosityMulticompSalt(T, water).value();
+    BOOST_CHECK_CLOSE(mu, muW, Scalar(1e-4));
 }
 
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, Scalar, Types)
