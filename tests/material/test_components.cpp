@@ -1040,6 +1040,34 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009Electrolytes, Scalar, Types)
     }
 }
 
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::SimpleHuDuanH2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+
+    // At 5 mass% every electrolyte changes water viscosity by less than 40%
+    const Scalar w = 0.05;
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    for (const auto& pairing : Electrolytes::pairings) {
+        const Scalar mm = Electrolytes::molarMass(pairing.electrolyte);
+        const Scalar cationShare =
+            pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
+        Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
+        saltArray[pairing.cation] = w * cationShare;
+        saltArray[pairing.anion] = w * (1 - cationShare);
+
+        for (const Scalar T : {298.15, 363.15}) {
+            const Evaluation temp(T);
+            const Scalar mu = BrineDyn::liquidViscosityMulticompSalt(temp, saltArray).value();
+            const Scalar muW = BrineDyn::liquidViscosityMulticompSalt(temp, water).value();
+            BOOST_CHECK_MESSAGE(mu / muW > 0.95 && mu / muW < 1.4,
+                                "relative viscosity " << mu / muW << " for electrolyte "
+                                << static_cast<int>(pairing.electrolyte) << " at T = " << T);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, Scalar, Types)
 {
     using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
