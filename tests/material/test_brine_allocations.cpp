@@ -95,6 +95,7 @@ BOOST_AUTO_TEST_CASE(BrinePropertiesDoNotAllocate)
     auto mu = Brine::liquidViscosityMulticompSalt(T, salinity);
     auto cp = Brine::liquidHeatCapacityLaliberte(T, salinity);
     auto h = Brine::liquidEnthalpyLaliberte(T, p, salinity);
+    auto hBasin = Brine::liquidEnthalpyLaliberteDriesner(T, p, salinity);
 
     counting = true;
     for (int i = 0; i < 10; ++i) {
@@ -102,6 +103,7 @@ BOOST_AUTO_TEST_CASE(BrinePropertiesDoNotAllocate)
         mu += Brine::liquidViscosityMulticompSalt(T, salinity);
         cp += Brine::liquidHeatCapacityLaliberte(T, salinity);
         h += Brine::liquidEnthalpyLaliberte(T, p, salinity);
+        hBasin += Brine::liquidEnthalpyLaliberteDriesner(T, p, salinity);
     }
     const auto electrolytes = Opm::SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
     counting = false;
@@ -111,5 +113,6 @@ BOOST_AUTO_TEST_CASE(BrinePropertiesDoNotAllocate)
     BOOST_CHECK(mu.value() > 0.0);
     BOOST_CHECK(cp.value() > 0.0);
     BOOST_CHECK(h.value() > 0.0);
+    BOOST_CHECK(hBasin.value() > 0.0);
     BOOST_CHECK(!electrolytes.empty());
 }

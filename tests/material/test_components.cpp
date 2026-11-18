@@ -1224,6 +1224,74 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineDriesnerEnthalpy, Scalar, Types)
     }
 }
 
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteDriesner, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 1>;
+    using H2O = Opm::H2O<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+    const Scalar tol = isFloat ? 1e-2 : 1e-5; // [%]
+    const Evaluation p(2.0e7);
+
+    // A basin-type brine and NaCl at the same mass fraction [mol/kg water]
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::NA] = 2.5;
+    molal[Opm::SaltIndex::CA] = 0.8;
+    molal[Opm::SaltIndex::MG] = 0.1;
+    molal[Opm::SaltIndex::K] = 0.1;
+    molal[Opm::SaltIndex::CL] = 4.4;
+    molal[Opm::SaltIndex::B] = 0.01;
+    const auto brine = molal.template convert_to<Opm::SaltMassFraction>();
+    const auto pairing
+        = Electrolytes::pairings[static_cast<std::size_t>(Electrolytes::Electrolyte::NaCl)];
+    const auto nacl = singleElectrolyte<Evaluation>(pairing, 0.2);
+
+    const auto cpOf = [&](const auto& salinity, Scalar t) {
+        const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+        return BrineDyn::liquidHeatCapacityLaliberteDriesner(T, p, salinity);
+    };
+    const auto hOf = [&](const auto& salinity, Scalar t) {
+        const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+        return BrineDyn::liquidEnthalpyLaliberteDriesner(T, p, salinity);
+    };
+
+    // dh/dT is the heat capacity everywhere, across both ends of the blend
+    for (const Scalar t : {25.0, 94.999, 95.001, 96.0, 97.5, 99.0, 99.999, 100.001, 150.0, 250.0}) {
+        BOOST_CHECK_CLOSE(hOf(brine, t).derivative(0), cpOf(brine, t).value(), tol);
+    }
+
+    // No jump in enthalpy or heat capacity at either end of the blend
+    for (const Scalar t : {95.0, 100.0}) {
+        const Scalar d = isFloat ? 0.1 : 1e-4;
+        const Scalar cp = cpOf(brine, t).value();
+        BOOST_CHECK_CLOSE(hOf(brine, t + d).value() - hOf(brine, t - d).value(), 2 * d * cp, 0.1);
+        BOOST_CHECK_CLOSE(cpOf(brine, t + d).value(), cpOf(brine, t - d).value(), 1e-2);
+    }
+
+    // Laliberte below the blend, with water at pressure
+    const Evaluation T50 = Evaluation::createVariable(323.15, 0);
+    const Evaluation cpW(H2O::liquidHeatCapacity(T50, p));
+    BOOST_CHECK_CLOSE(cpOf(brine, 50.0).value(),
+                      BrineDyn::liquidHeatCapacityLaliberte(T50, brine, cpW).value(),
+                      tol);
+
+    // Above the blend, a NaCl brine is Driesner itself, in heat capacity and enthalpy
+    const Evaluation T200 = Evaluation::createVariable(473.15, 0);
+    const Evaluation w(0.2);
+    BOOST_CHECK_CLOSE(
+        cpOf(nacl, 200.0).value(), BrineDyn::liquidHeatCapacityDriesner(T200, p, w).value(), tol);
+    BOOST_CHECK_CLOSE(
+        hOf(nacl, 200.0).value(), BrineDyn::liquidEnthalpyDriesner(T200, p, w).value(), tol);
+
+    // Composition still counts above the blend: without boron, the Ca-rich brine stays below
+    // NaCl at the same salt mass fraction
+    molal[Opm::SaltIndex::B] = 0.0;
+    const auto salts = molal.template convert_to<Opm::SaltMassFraction>();
+    const auto naclSame = singleElectrolyte<Evaluation>(pairing, salts.sum().value());
+    BOOST_CHECK(cpOf(salts, 200.0).value() < 0.99 * cpOf(naclSame, 200.0).value());
+}
+
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
 {
     using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
