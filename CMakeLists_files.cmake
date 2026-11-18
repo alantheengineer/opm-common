@@ -1373,7 +1373,9 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/material/components/Brine.hpp
   opm/material/components/BOH3.hpp
   opm/material/components/BrineDynamic.hpp
+  opm/material/components/DebyeHuckelSlope.hpp
   opm/material/components/LaliberteHeatCapacity.hpp
+  opm/material/components/MaoDuanBrine.hpp
   opm/material/components/BrIon.hpp
   opm/material/components/C1.hpp
   opm/material/components/C10.hpp

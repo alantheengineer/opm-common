@@ -1292,6 +1292,154 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteDriesner, Scalar, Types)
     BOOST_CHECK(cpOf(salts, 200.0).value() < 0.99 * cpOf(naclSame, 200.0).value());
 }
 
+BOOST_AUTO_TEST_CASE(DebyeHuckelSlopes)
+{
+    using DH = Opm::DebyeHuckelSlope<double>;
+
+    // Bradley and Pitzer (1979): dielectric constant 78.38 and A_phi 0.391 at 25 C, 1 bar
+    BOOST_CHECK_CLOSE(DH::dielectricConstant(298.15, 1e5), 78.38, 1e-2);
+    BOOST_CHECK_CLOSE(DH::osmoticSlope(298.15, 1e5), 0.3915, 0.1);
+
+    // The table follows the direct calculation above the vapour pressure
+    for (const double T : {280.0, 323.0, 377.7, 421.3, 498.0, 546.2}) {
+        for (const double p : {2.1e6, 1.37e7, 3.3e7, 7.81e7}) {
+            BOOST_CHECK_CLOSE(DH::volumeSlope(T, p), DH::volumeSlopeDirect(T, p), 0.3);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(MaoDuanChlorides, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 2>;
+    using MaoDuan = Opm::MaoDuanBrine<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::H2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    using E = typename Electrolytes::Electrolyte;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+
+    // Infinite-dilution apparent molar volumes at 25 C and 0.1 MPa from this model, as listed
+    // in Table 5 of Mao and Duan (2008) [cm3/mol]
+    const Evaluation T(298.15);
+    const Evaluation p(1e5);
+    const Evaluation rhoW = MaoDuan::waterDensity(T, p);
+    const std::array<std::pair<E, Scalar>, 6> dilute = {{{E::LiCl, 17.10},
+                                                         {E::NaCl, 16.51},
+                                                         {E::KCl, 27.09},
+                                                         {E::MgCl2, 13.70},
+                                                         {E::CaCl2, 17.43},
+                                                         {E::SrCl2, 17.90}}};
+    for (const auto& [e, ref] : dilute) {
+        const Scalar v = MaoDuan::apparentMolarVolume(e, T, p, Evaluation(1e-9), rhoW).value();
+        BOOST_CHECK_SMALL(v * Scalar(1e6) - ref, Scalar(0.006));
+    }
+
+    // Pure water is IAPWS-97 water
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    BOOST_CHECK_CLOSE(BrineDyn::liquidDensityMaoDuan(T, p, water).value(), rhoW.value(), 1e-10);
+
+    // NaCl at 25 C agrees with Laliberte and Cooper
+    const auto nacl = Electrolytes::pairings[static_cast<std::size_t>(E::NaCl)];
+    for (const Scalar w : {0.05, 0.15, 0.25}) {
+        const auto saltArray = singleElectrolyte<Evaluation>(nacl, w);
+        BOOST_CHECK_CLOSE(BrineDyn::liquidDensityMaoDuan(T, p, saltArray).value(),
+                          BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value(),
+                          0.1);
+    }
+
+    // Derivatives against central differences, for a Ca-Na-Mg-K chloride brine
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::NA] = 2.5;
+    molal[Opm::SaltIndex::CA] = 0.8;
+    molal[Opm::SaltIndex::MG] = 0.1;
+    molal[Opm::SaltIndex::K] = 0.1;
+    molal[Opm::SaltIndex::CL] = 4.4;
+    const auto brine = molal.template convert_to<Opm::SaltMassFraction>();
+    const Evaluation T1 = Evaluation::createVariable(393.15, 0);
+    const Evaluation p1 = Evaluation::createVariable(3.0e7, 1);
+    const Evaluation rho = BrineDyn::liquidDensityMaoDuan(T1, p1, brine);
+    const auto rhoAt = [&](Scalar t, Scalar pr) {
+        return BrineDyn::liquidDensityMaoDuan(Evaluation(t), Evaluation(pr), brine).value();
+    };
+    const Scalar dT = isFloat ? 0.5 : 1e-3;
+    const Scalar dp = isFloat ? 1e5 : 1e2;
+    const Scalar tol = isFloat ? 5.0 : 1e-3; // [%]
+    BOOST_CHECK_CLOSE(
+        rho.derivative(0), (rhoAt(393.15 + dT, 3.0e7) - rhoAt(393.15 - dT, 3.0e7)) / (2 * dT), tol);
+    BOOST_CHECK_CLOSE(
+        rho.derivative(1), (rhoAt(393.15, 3.0e7 + dp) - rhoAt(393.15, 3.0e7 - dp)) / (2 * dp), tol);
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(MaoDuanViscosity, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 2>;
+    using MaoDuan = Opm::MaoDuanBrine<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::H2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    using E = typename Electrolytes::Electrolyte;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+
+    // Water from eq 6 against IAPWS (Huber et al. 2009): 0.8900 mPa s at 25 C and 0.2817
+    // mPa s at 100 C, both at 0.1 MPa
+    BOOST_CHECK_CLOSE(MaoDuan::waterViscosity(Scalar(298.15), Scalar(1e5)), Scalar(0.8900e-3), 0.5);
+    BOOST_CHECK_CLOSE(
+        MaoDuan::waterViscosity(Scalar(373.15), Scalar(1.01325e5)), Scalar(0.2817e-3), 0.5);
+
+    // Pure water
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    const Evaluation T25(298.15);
+    const Evaluation p1(1e5);
+    BOOST_CHECK_CLOSE(BrineDyn::liquidViscosityMaoDuan(T25, p1, water).value(),
+                      MaoDuan::waterViscosity(T25, p1).value(),
+                      1e-4);
+
+    // CaCl2 against Abdulagatov and Azizov (2006), Table 2, at 2.00 mol/kg [K, MPa, mPa s]
+    const std::array<std::array<Scalar, 3>, 4> measured = {{{298.15, 30.0, 1.6191},
+                                                            {372.09, 30.0, 0.5747},
+                                                            {423.76, 10.0, 0.3651},
+                                                            {474.06, 60.0, 0.2944}}};
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> cacl2;
+    cacl2[Opm::SaltIndex::CA] = 2.0;
+    cacl2[Opm::SaltIndex::CL] = 4.0;
+    const auto cacl2Salinity = cacl2.template convert_to<Opm::SaltMassFraction>();
+    for (const auto& [T, P, mu] : measured) {
+        const Scalar value
+            = BrineDyn::liquidViscosityMaoDuan(Evaluation(T), Evaluation(P * 1e6), cacl2Salinity)
+                  .value();
+        BOOST_CHECK_CLOSE(value * 1e3, mu, 3.0);
+    }
+
+    // At 25 C the alkali chlorides agree with Laliberte to within the scatter of the data
+    for (const E e : {E::LiCl, E::NaCl, E::KCl}) {
+        const auto pairing = Electrolytes::pairings[static_cast<std::size_t>(e)];
+        const auto saltArray = singleElectrolyte<Evaluation>(pairing, 0.1);
+        BOOST_CHECK_CLOSE(BrineDyn::liquidViscosityMaoDuan(T25, p1, saltArray).value(),
+                          BrineDyn::liquidViscosityMulticompSalt(T25, saltArray).value(),
+                          3.0);
+    }
+
+    // Derivatives against central differences, for a Ca-Na-Mg-K chloride brine
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::NA] = 2.5;
+    molal[Opm::SaltIndex::CA] = 0.8;
+    molal[Opm::SaltIndex::MG] = 0.1;
+    molal[Opm::SaltIndex::K] = 0.1;
+    molal[Opm::SaltIndex::CL] = 4.4;
+    const auto brine = molal.template convert_to<Opm::SaltMassFraction>();
+    const Evaluation T = Evaluation::createVariable(393.15, 0);
+    const Evaluation p = Evaluation::createVariable(3.0e7, 1);
+    const Evaluation mu = BrineDyn::liquidViscosityMaoDuan(T, p, brine);
+    const auto muAt = [&](Scalar t, Scalar pr) {
+        return BrineDyn::liquidViscosityMaoDuan(Evaluation(t), Evaluation(pr), brine).value();
+    };
+    const Scalar dT = isFloat ? 0.5 : 1e-3;
+    const Scalar dp = isFloat ? 1e5 : 1e2;
+    const Scalar tol = isFloat ? 5.0 : 1e-3; // [%]
+    BOOST_CHECK_CLOSE(
+        mu.derivative(0), (muAt(393.15 + dT, 3.0e7) - muAt(393.15 - dT, 3.0e7)) / (2 * dT), tol);
+    BOOST_CHECK_CLOSE(
+        mu.derivative(1), (muAt(393.15, 3.0e7 + dp) - muAt(393.15, 3.0e7 - dp)) / (2 * dp), tol);
+}
+
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
 {
     using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
