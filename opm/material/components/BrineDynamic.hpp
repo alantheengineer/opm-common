@@ -28,11 +28,12 @@
 #ifndef OPM_BRINEDYNAMIC_HPP
 #define OPM_BRINEDYNAMIC_HPP
 
-#include <opm/common/utility/gpuDecorators.hpp>
 #include <opm/common/utility/SaltArray.hpp>
 #include <opm/common/utility/SaltElectrolytes.hpp>
-#include <opm/material/components/Component.hpp>
+#include <opm/common/utility/gpuDecorators.hpp>
 #include <opm/material/common/MathToolbox.hpp>
+#include <opm/material/components/Component.hpp>
+#include <opm/material/components/LaliberteHeatCapacity.hpp>
 
 #include <array>
 #include <cassert>
@@ -620,9 +621,104 @@ public:
 #endif
     }
 
+    /*!
+     * Heat capacity of brine from Laliberte, Journal of Chemical and Engineering Data, Vol. 54,
+     * No. 6, 2009, with the paper's own water heat capacity, so it reproduces the published
+     * model.
+     *
+     * @param temperature Temperature [K]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberte(const Evaluation& temperature,
+                                const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const Evaluation cpW = LaliberteHeatCapacity<Scalar>::water(temperature);
+        return liquidHeatCapacityLaliberte(temperature, salinity, cpW, pairing);
+    }
+
+    /*!
+     * Heat capacity of brine from Laliberte (2009) with a given pure-water heat capacity
+     *
+     * @param temperature Temperature [K]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param cpW Heat capacity of pure water [J/(kg K)]
+     * @param pairing How ions are paired into electrolytes
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberte(const Evaluation& temperature,
+                                const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                const Evaluation& cpW,
+                                PairingMethod pairing = PairingMethod::Proportional)
+    {
+        using HeatCapacity = LaliberteHeatCapacity<Scalar>;
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation tempC = temperature - 273.15;
+
+        // Boric acid has no Laliberte heat capacity set, so it counts as water
+        Evaluation cp = (1.0 - sumW) * cpW;
+        for (const auto& salt : electrolytes) {
+            const bool boricAcid = salt.first == Electrolyte::BOH3;
+            cp += salt.second * (boricAcid ? cpW : HeatCapacity::solute(salt.first, tempC, sumW));
+        }
+        return cp;
+    }
+
+    /*!
+     * Enthalpy of brine: water enthalpy from H2O at the given temperature and pressure, plus
+     * the Laliberte (2009) solute heat capacities integrated from 0 C. Heat of mixing at 0 C
+     * is neglected. The temperature derivative is the Laliberte heat capacity with water at
+     * pressure, which the paper suggests for use at high pressure.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidEnthalpyLaliberte(const Evaluation& temperature,
+                            const Evaluation& pressure,
+                            const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                            PairingMethod pairing = PairingMethod::Proportional)
+    {
+        using HeatCapacity = LaliberteHeatCapacity<Scalar>;
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation tempC = temperature - 273.15;
+        const Evaluation hW = H2O::liquidEnthalpy(temperature, pressure);
+
+        Evaluation h = (1.0 - sumW) * hW;
+        for (const auto& salt : electrolytes) {
+            const bool boricAcid = salt.first == Electrolyte::BOH3;
+            h += salt.second
+                * (boricAcid ? hW : HeatCapacity::soluteEnthalpy(salt.first, tempC, sumW));
+        }
+        return h;
+    }
+
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
+
+    template <class Evaluation>
+    static Evaluation soluteMassFraction_(
+        const typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>& electrolytes)
+    {
+        Evaluation sum = 0.0;
+        for (const auto& salt : electrolytes) {
+            sum += salt.second;
+        }
+        return sum;
+    }
 
     //Molar mass salt (assumes pure NaCl) [kg/mol]
     static constexpr Scalar mM_salt()

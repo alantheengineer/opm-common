@@ -1,6 +1,7 @@
 """Writes ref_data_laliberte_2009.json: density and viscosity of single-electrolyte brines
 computed by the thermo package from the Laliberte (2009) coefficients, inside each fitted
-range. Run with python3 laliberte_2009_reference.py > ref_data_laliberte_2009.json"""
+range, and heat capacity for every electrolyte with the water heat capacity thermo used.
+Run with python3 laliberte_2009_reference.py > ref_data_laliberte_2009.json"""
 import csv
 import json
 import os
@@ -12,6 +13,7 @@ import thermo
 import thermo.electrochem as electrochem
 
 NAMES = ["LiCl", "Li2SO4", "SrCl2", "NaBr", "KBr", "NaHCO3", "Na2CO3", "KHCO3", "K2CO3"]
+HEAT_CAPACITY_NAMES = ["CaCl2", "KCl", "K2SO4", "MgCl2", "MgSO4", "NaCl", "Na2SO4"] + NAMES
 TSV = os.path.join(os.path.dirname(chemicals.__file__), "Electrolytes", "Laliberte2009.tsv")
 
 with open(TSV) as f:
@@ -31,5 +33,18 @@ for name in NAMES:
         entry[prop] = [[float(t + 273.15), float(w), float(fn(t + 273.15, [w], [cas]))]
                        for t in temps for w in fracs]
     out[name] = entry
+
+# Heat capacity: [T, w, solution Cp, water Cp], both in J/(kg K)
+for name in HEAT_CAPACITY_NAMES:
+    row = rows[name]
+    cas = row[1]
+    tmin, tmax, wmax = (float(row[c]) for c in (29, 30, 31))
+    temps = np.unique(np.linspace(max(tmin, 0.0), tmax, 4))
+    fracs = np.linspace(0.1, 0.9, 4) * wmax
+    out.setdefault(name, {})["heat_capacity"] = [
+        [float(t + 273.15), float(w),
+         float(electrochem.Laliberte_heat_capacity(t + 273.15, [w], [cas])),
+         float(electrochem.Laliberte_heat_capacity_w(t + 273.15))]
+        for t in temps for w in fracs]
 json.dump(out, sys.stdout, indent=1)
 sys.stdout.write("\n")
