@@ -1188,6 +1188,42 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteEnthalpy, Scalar, Types)
     }
 }
 
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineDriesnerEnthalpy, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 1>;
+    using H2O = Opm::H2O<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+    const Evaluation p(1.0e6);
+
+    // Pure water gives the water enthalpy
+    const Evaluation T0(323.15);
+    BOOST_CHECK_CLOSE(BrineDyn::liquidEnthalpyDriesner(T0, p, Evaluation(0.0)).value(),
+                      H2O::liquidEnthalpy(T0, p).value(),
+                      isFloat ? Scalar(1e-3) : Scalar(1e-9));
+
+    const auto nacl
+        = Electrolytes::pairings[static_cast<std::size_t>(Electrolytes::Electrolyte::NaCl)];
+    for (const Scalar w : {0.05, 0.1, 0.2, 0.25}) {
+        for (const Scalar t : {5.0, 25.0, 50.0, 75.0, 100.0}) {
+            const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+
+            // Heat capacity (eq 27) is the temperature derivative of enthalpy
+            const Evaluation h = BrineDyn::liquidEnthalpyDriesner(T, p, Evaluation(w));
+            const Scalar cp = BrineDyn::liquidHeatCapacityDriesner(T, p, Evaluation(w)).value();
+            BOOST_CHECK_CLOSE(h.derivative(0), cp, isFloat ? Scalar(1e-2) : Scalar(1e-6));
+
+            // Driesner runs 1 to 4% above Laliberte for NaCl at low pressure; the paper notes
+            // its heat capacity is high at high salinity and moderate pressure
+            const auto saltArray = singleElectrolyte<Evaluation>(nacl, w);
+            const Scalar cpLal = BrineDyn::liquidHeatCapacityLaliberte(T, saltArray).value();
+            BOOST_CHECK_MESSAGE(cp / cpLal > 1.0 && cp / cpLal < 1.05,
+                                "w = " << w << ", t = " << t << ": " << cp << " against " << cpLal);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
 {
     using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;

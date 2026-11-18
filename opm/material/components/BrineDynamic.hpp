@@ -42,6 +42,7 @@
 #include <numeric>
 #include <span>
 #include <string_view>
+#include <utility>
 
 namespace Opm {
 
@@ -705,6 +706,46 @@ public:
         return h;
     }
 
+    /*!
+     * Enthalpy of H2O-NaCl liquid from Driesner, Geochimica et Cosmochimica Acta 71, 2007,
+     * eqs 21 to 26: the pure-water enthalpy at a scaled temperature T*_h = q1 + q2 T, with T in
+     * C and pressure in bar. Valid from 0 to 1000 C and 1 to 5000 bar at any NaCl fraction, and
+     * referenced, like water, to liquid water at the triple point.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param massFracNaCl NaCl mass fraction in the brine [-]
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation liquidEnthalpyDriesner(const Evaluation& temperature,
+                                             const Evaluation& pressure,
+                                             const Evaluation& massFracNaCl)
+    {
+        const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
+        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
+        return H2O::liquidEnthalpy(scaledTempC + 273.15, pressure);
+    }
+
+    /*!
+     * Heat capacity of H2O-NaCl liquid from Driesner (2007), eq 27: q2 times the pure-water
+     * heat capacity at the scaled temperature.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param massFracNaCl NaCl mass fraction in the brine [-]
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation liquidHeatCapacityDriesner(const Evaluation& temperature,
+                                                 const Evaluation& pressure,
+                                                 const Evaluation& massFracNaCl)
+    {
+        const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
+        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
+        return q2 * H2O::liquidHeatCapacity(scaledTempC + 273.15, pressure);
+    }
+
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
@@ -718,6 +759,37 @@ private:
             sum += salt.second;
         }
         return sum;
+    }
+
+    /*!
+     * Coefficients q1 and q2 of the Driesner (2007) enthalpy scaling, eqs 23 to 26 and Table 5.
+     * q10 and q20 follow from q1 = 0 and q2 = 1 for pure water, q12 and q23 from the values
+     * for pure NaCl.
+     */
+    template <class Evaluation>
+    static std::pair<Evaluation, Evaluation> driesnerScaling_(const Evaluation& pressure,
+                                                              const Evaluation& massFracNaCl)
+    {
+        const Evaluation P = pressure * 1e-5; // bar
+        const Scalar mmNaCl
+            = saltMolarMass<Scalar>(SaltIndex::NA) + saltMolarMass<Scalar>(SaltIndex::CL);
+        const Evaluation molNaCl = massFracNaCl / mmNaCl;
+        const Evaluation x = molNaCl / (molNaCl + (1.0 - massFracNaCl) / H2O::molarMass());
+
+        const Evaluation q11 = -32.1724 + 0.0621255 * P;
+        const Evaluation q21 = -1.69513 - 4.52781e-4 * P - 6.04279e-8 * P * P;
+        const Evaluation q22 = 0.0612567 + 1.88082e-5 * P;
+        const Evaluation q1NaCl = 47.9048 - 9.36994e-3 * P + 6.51059e-6 * P * P;
+        const Evaluation q2NaCl = 0.241022 + 3.45087e-5 * P - 4.28356e-9 * P * P;
+
+        const Evaluation q10 = q1NaCl;
+        const Evaluation q12 = -q10 - q11;
+        const Evaluation q20 = 1.0 - q21 * sqrt(q22);
+        const Evaluation q23 = q2NaCl - q20 - q21 * sqrt(1.0 + q22);
+
+        const Evaluation q1 = q10 + q11 * (1.0 - x) + q12 * (1.0 - x) * (1.0 - x);
+        const Evaluation q2 = q20 + q21 * sqrt(x + q22) + q23 * x;
+        return {q1, q2};
     }
 
     //Molar mass salt (assumes pure NaCl) [kg/mol]
