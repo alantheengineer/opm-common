@@ -28,11 +28,12 @@
 #ifndef OPM_BRINEDYNAMIC_HPP
 #define OPM_BRINEDYNAMIC_HPP
 
-#include <opm/common/utility/gpuDecorators.hpp>
 #include <opm/common/utility/SaltArray.hpp>
 #include <opm/common/utility/SaltElectrolytes.hpp>
-#include <opm/material/components/Component.hpp>
+#include <opm/common/utility/gpuDecorators.hpp>
 #include <opm/material/common/MathToolbox.hpp>
+#include <opm/material/components/Component.hpp>
+#include <opm/material/components/LaliberteHeatCapacity.hpp>
 
 #include <array>
 #include <cassert>
@@ -41,6 +42,7 @@
 #include <numeric>
 #include <span>
 #include <string_view>
+#include <utility>
 
 namespace Opm {
 
@@ -620,9 +622,352 @@ public:
 #endif
     }
 
+    /*!
+     * Heat capacity of brine from Laliberte, Journal of Chemical and Engineering Data, Vol. 54,
+     * No. 6, 2009, with the paper's own water heat capacity, so it reproduces the published
+     * model.
+     *
+     * @param temperature Temperature [K]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberte(const Evaluation& temperature,
+                                const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const Evaluation cpW = LaliberteHeatCapacity<Scalar>::water(temperature);
+        return liquidHeatCapacityLaliberte(temperature, salinity, cpW, pairing);
+    }
+
+    /*!
+     * Heat capacity of brine from Laliberte (2009) with a given pure-water heat capacity
+     *
+     * @param temperature Temperature [K]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param cpW Heat capacity of pure water [J/(kg K)]
+     * @param pairing How ions are paired into electrolytes
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberte(const Evaluation& temperature,
+                                const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                const Evaluation& cpW,
+                                PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return heatCapacityLaliberte_(temperature, electrolytes, cpW);
+    }
+
+    /*!
+     * Enthalpy of brine: water enthalpy from H2O at the given temperature and pressure, plus
+     * the Laliberte (2009) solute heat capacities integrated from 0 C. Heat of mixing at 0 C
+     * is neglected. The temperature derivative is the Laliberte heat capacity with water at
+     * pressure, which the paper suggests for use at high pressure.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidEnthalpyLaliberte(const Evaluation& temperature,
+                            const Evaluation& pressure,
+                            const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                            PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const Evaluation hW = H2O::liquidEnthalpy(temperature, pressure);
+        return enthalpyLaliberte_(temperature, electrolytes, hW);
+    }
+
+    /*!
+     * Enthalpy of H2O-NaCl liquid from Driesner, Geochimica et Cosmochimica Acta 71, 2007,
+     * eqs 21 to 26: the pure-water enthalpy at a scaled temperature T*_h = q1 + q2 T, with T in
+     * C and pressure in bar. Valid from 0 to 1000 C and 1 to 5000 bar at any NaCl fraction, and
+     * referenced, like water, to liquid water at the triple point.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param massFracNaCl NaCl mass fraction in the brine [-]
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation liquidEnthalpyDriesner(const Evaluation& temperature,
+                                             const Evaluation& pressure,
+                                             const Evaluation& massFracNaCl)
+    {
+        const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
+        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
+        return H2O::liquidEnthalpy(scaledTempC + 273.15, pressure);
+    }
+
+    /*!
+     * Heat capacity of H2O-NaCl liquid from Driesner (2007), eq 27: q2 times the pure-water
+     * heat capacity at the scaled temperature.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param massFracNaCl NaCl mass fraction in the brine [-]
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation liquidHeatCapacityDriesner(const Evaluation& temperature,
+                                                 const Evaluation& pressure,
+                                                 const Evaluation& massFracNaCl)
+    {
+        const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
+        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
+        return q2 * H2O::liquidHeatCapacity(scaledTempC + 273.15, pressure);
+    }
+
+    /*!
+     * Heat capacity of a multicomponent brine over the full temperature range: Laliberte
+     * (2009) below 95 C, with water at pressure, and above 100 C Driesner (2007) at the same
+     * salt mass fraction as NaCl, scaled by the ratio of the brine's Laliberte heat capacity to
+     * NaCl's at 100 C. The two are blended smoothly in between.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberteDriesner(const Evaluation& temperature,
+                                        const Evaluation& pressure,
+                                        const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                        PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const LaliberteDriesner_<Evaluation> model(pressure, salinity, pairing);
+        return model.heatCapacity(temperature);
+    }
+
+    /*!
+     * Enthalpy of a multicomponent brine over the full temperature range. It equals the
+     * Driesner (2007) enthalpy at 100 C, which includes heat of mixing and shares the water
+     * reference, and elsewhere follows liquidHeatCapacityLaliberteDriesner, so it is smooth and
+     * its temperature derivative is that heat capacity.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidEnthalpyLaliberteDriesner(const Evaluation& temperature,
+                                    const Evaluation& pressure,
+                                    const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                    PairingMethod pairing = PairingMethod::Proportional)
+    {
+        const LaliberteDriesner_<Evaluation> model(pressure, salinity, pairing);
+        return model.enthalpy(temperature);
+    }
+
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
+
+    template <class Evaluation>
+    static Evaluation soluteMassFraction_(
+        const typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>& electrolytes)
+    {
+        Evaluation sum = 0.0;
+        for (const auto& salt : electrolytes) {
+            sum += salt.second;
+        }
+        return sum;
+    }
+
+    template <class Evaluation>
+    using ElectrolyteList_ =
+        typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>;
+
+    // Laliberte (2009) eq 10. Boric acid has no heat capacity set, so it counts as water.
+    template <class Evaluation>
+    static Evaluation heatCapacityLaliberte_(const Evaluation& temperature,
+                                             const ElectrolyteList_<Evaluation>& electrolytes,
+                                             const Evaluation& cpW)
+    {
+        using HeatCapacity = LaliberteHeatCapacity<Scalar>;
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation tempC = temperature - 273.15;
+
+        Evaluation cp = (1.0 - sumW) * cpW;
+        for (const auto& salt : electrolytes) {
+            const bool boricAcid = salt.first == Electrolyte::BOH3;
+            cp += salt.second * (boricAcid ? cpW : HeatCapacity::solute(salt.first, tempC, sumW));
+        }
+        return cp;
+    }
+
+    // Water enthalpy plus the solute heat capacities integrated from 0 C
+    template <class Evaluation>
+    static Evaluation enthalpyLaliberte_(const Evaluation& temperature,
+                                         const ElectrolyteList_<Evaluation>& electrolytes,
+                                         const Evaluation& hW)
+    {
+        using HeatCapacity = LaliberteHeatCapacity<Scalar>;
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation tempC = temperature - 273.15;
+
+        Evaluation h = (1.0 - sumW) * hW;
+        for (const auto& salt : electrolytes) {
+            const bool boricAcid = salt.first == Electrolyte::BOH3;
+            h += salt.second
+                * (boricAcid ? hW : HeatCapacity::soluteEnthalpy(salt.first, tempC, sumW));
+        }
+        return h;
+    }
+
+    /*!
+     * Laliberte below the blend and Driesner above it, for one brine at one pressure. The
+     * Driesner part uses the salt mass fraction as NaCl, scaled by the Laliberte heat capacity
+     * ratio of the brine to that NaCl brine at the top of the blend, which keeps the effect of
+     * composition. Heat capacities are blended with a smoothstep weight; enthalpy is pinned to
+     * Driesner at the top of the blend and integrated from the heat capacity elsewhere.
+     */
+    template <class Evaluation>
+    class LaliberteDriesner_
+    {
+    public:
+        LaliberteDriesner_(const Evaluation& pressure,
+                           const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                           PairingMethod pairing)
+            : pressure_(pressure)
+            , electrolytes_(SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing))
+        {
+            ElectrolyteList_<Evaluation> nacl;
+            for (const auto& salt : electrolytes_) {
+                if (salt.first != Electrolyte::BOH3) {
+                    saltMassFraction_ += salt.second;
+                }
+            }
+            if (saltMassFraction_ > 0.0) {
+                nacl.push_back({Electrolyte::NaCl, saltMassFraction_});
+            }
+
+            const Evaluation top(blendTop_);
+            const Evaluation cpW = LaliberteHeatCapacity<Scalar>::water(top);
+            ratio_ = heatCapacityLaliberte_(top, electrolytes_, cpW)
+                / heatCapacityLaliberte_(top, nacl, cpW);
+        }
+
+        Evaluation heatCapacity(const Evaluation& temperature) const
+        {
+            if (temperature <= blendBottom_) {
+                return low_(temperature);
+            }
+            if (temperature >= blendTop_) {
+                return high_(temperature);
+            }
+            const Evaluation low = low_(temperature);
+            return low + weight_(temperature) * (high_(temperature) - low);
+        }
+
+        Evaluation enthalpy(const Evaluation& temperature) const
+        {
+            const Evaluation top(blendTop_);
+            const Evaluation hTop = liquidEnthalpyDriesner(top, pressure_, saltMassFraction_);
+            if (temperature >= blendTop_) {
+                const Evaluation h
+                    = liquidEnthalpyDriesner(temperature, pressure_, saltMassFraction_);
+                return hTop + ratio_ * (h - hTop);
+            }
+            const Evaluation from
+                = temperature > blendBottom_ ? temperature : Evaluation(blendBottom_);
+            return lowEnthalpy_(temperature) + hTop - lowEnthalpy_(top) - blendCorrection_(from);
+        }
+
+    private:
+        static constexpr Scalar blendBottom_ = 368.15; // 95 C
+        static constexpr Scalar blendTop_ = 373.15; // 100 C
+
+        Evaluation low_(const Evaluation& temperature) const
+        {
+            const Evaluation cpW = H2O::liquidHeatCapacity(temperature, pressure_);
+            return heatCapacityLaliberte_(temperature, electrolytes_, cpW);
+        }
+
+        Evaluation high_(const Evaluation& temperature) const
+        {
+            return ratio_ * liquidHeatCapacityDriesner(temperature, pressure_, saltMassFraction_);
+        }
+
+        Evaluation lowEnthalpy_(const Evaluation& temperature) const
+        {
+            const Evaluation hW = H2O::liquidEnthalpy(temperature, pressure_);
+            return enthalpyLaliberte_(temperature, electrolytes_, hW);
+        }
+
+        // Smoothstep from 0 at the bottom of the blend to 1 at the top
+        static Evaluation weight_(const Evaluation& temperature)
+        {
+            const Evaluation u = (temperature - blendBottom_) / (blendTop_ - blendBottom_);
+            return u * u * (3.0 - 2.0 * u);
+        }
+
+        // Integral of weight * (high - low) from a temperature to the top of the blend, by
+        // three-point Gauss-Legendre, which is exact here to well below 1e-6
+        Evaluation blendCorrection_(const Evaluation& from) const
+        {
+            static constexpr std::array<Scalar, 3> nodes
+                = {-0.7745966692414834, 0.0, 0.7745966692414834};
+            static constexpr std::array<Scalar, 3> weights = {5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0};
+            const Evaluation half = 0.5 * (blendTop_ - from);
+            const Evaluation mid = 0.5 * (blendTop_ + from);
+            Evaluation sum = 0.0;
+            for (std::size_t k = 0; k < nodes.size(); ++k) {
+                const Evaluation t = mid + half * nodes[k];
+                sum += weights[k] * weight_(t) * (high_(t) - low_(t));
+            }
+            return half * sum;
+        }
+
+        Evaluation pressure_;
+        ElectrolyteList_<Evaluation> electrolytes_;
+        Evaluation saltMassFraction_ {0.0};
+        Evaluation ratio_ {1.0};
+    };
+
+    /*!
+     * Coefficients q1 and q2 of the Driesner (2007) enthalpy scaling, eqs 23 to 26 and Table 5.
+     * q10 and q20 follow from q1 = 0 and q2 = 1 for pure water, q12 and q23 from the values
+     * for pure NaCl.
+     */
+    template <class Evaluation>
+    static std::pair<Evaluation, Evaluation> driesnerScaling_(const Evaluation& pressure,
+                                                              const Evaluation& massFracNaCl)
+    {
+        const Evaluation P = pressure * 1e-5; // bar
+        const Scalar mmNaCl
+            = saltMolarMass<Scalar>(SaltIndex::NA) + saltMolarMass<Scalar>(SaltIndex::CL);
+        const Evaluation molNaCl = massFracNaCl / mmNaCl;
+        const Evaluation x = molNaCl / (molNaCl + (1.0 - massFracNaCl) / H2O::molarMass());
+
+        const Evaluation q11 = -32.1724 + 0.0621255 * P;
+        const Evaluation q21 = -1.69513 - 4.52781e-4 * P - 6.04279e-8 * P * P;
+        const Evaluation q22 = 0.0612567 + 1.88082e-5 * P;
+        const Evaluation q1NaCl = 47.9048 - 9.36994e-3 * P + 6.51059e-6 * P * P;
+        const Evaluation q2NaCl = 0.241022 + 3.45087e-5 * P - 4.28356e-9 * P * P;
+
+        const Evaluation q10 = q1NaCl;
+        const Evaluation q12 = -q10 - q11;
+        const Evaluation q20 = 1.0 - q21 * sqrt(q22);
+        const Evaluation q23 = q2NaCl - q20 - q21 * sqrt(1.0 + q22);
+
+        const Evaluation q1 = q10 + q11 * (1.0 - x) + q12 * (1.0 - x) * (1.0 - x);
+        const Evaluation q2 = q20 + q21 * sqrt(x + q22) + q23 * x;
+        return {q1, q2};
+    }
 
     //Molar mass salt (assumes pure NaCl) [kg/mol]
     static constexpr Scalar mM_salt()

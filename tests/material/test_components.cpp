@@ -168,6 +168,20 @@ std::string
 electrolyteName(const Electrolyte e)
 {
     switch (e) {
+    case Electrolyte::CaCl2:
+        return "CaCl2";
+    case Electrolyte::KCl:
+        return "KCl";
+    case Electrolyte::K2SO4:
+        return "K2SO4";
+    case Electrolyte::MgCl2:
+        return "MgCl2";
+    case Electrolyte::MgSO4:
+        return "MgSO4";
+    case Electrolyte::NaCl:
+        return "NaCl";
+    case Electrolyte::Na2SO4:
+        return "Na2SO4";
     case Electrolyte::LiCl:
         return "LiCl";
     case Electrolyte::Li2SO4:
@@ -1052,6 +1066,230 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009Electrolytes, Scalar, Types)
             }
         }
     }
+}
+
+// Mass fractions of the two ions of one electrolyte at total mass fraction w
+template <class Evaluation, class Pairing>
+Opm::SaltArray<Evaluation, Opm::SaltMassFraction>
+singleElectrolyte(const Pairing& pairing, const typename Evaluation::ValueType w)
+{
+    using Scalar = typename Evaluation::ValueType;
+    const Scalar mm = Opm::SaltElectrolytes<Scalar>::molarMass(pairing.electrolyte);
+    const Scalar cationShare = pairing.cationsPer * Opm::saltMolarMass<Scalar>(pairing.cation) / mm;
+    Opm::SaltArray<Evaluation, Opm::SaltMassFraction> saltArray;
+    saltArray[pairing.cation] = w * cationShare;
+    saltArray[pairing.anion] = w * (1 - cationShare);
+    return saltArray;
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberte2009HeatCapacity, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::SimpleHuDuanH2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+
+    // thermo uses its own water heat capacity, which is passed in with each point
+    const std::filesystem::path file("material/ref_data_laliberte_2009.json");
+    const Json::JsonObject reference(file);
+    const Scalar tol = std::is_same_v<Scalar, float> ? 2e-4 : 1e-9;
+
+    for (const auto& pairing : Electrolytes::pairings) {
+        if (Electrolytes::isNeutral(pairing)) {
+            continue;
+        }
+        const std::string name = electrolyteName(pairing.electrolyte);
+        const Json::JsonObject points = reference.get_item(name).get_item("heat_capacity");
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            const Json::JsonObject point = points.get_array_item(i);
+            const Evaluation T(point.get_array_item(0).as_double());
+            const Scalar w = point.get_array_item(1).as_double();
+            const Scalar ref = point.get_array_item(2).as_double();
+            const Evaluation cpW(point.get_array_item(3).as_double());
+
+            const auto saltArray = singleElectrolyte<Evaluation>(pairing, w);
+            const Scalar value = BrineDyn::liquidHeatCapacityLaliberte(T, saltArray, cpW).value();
+            BOOST_CHECK_MESSAGE(close_at_tolerance(value, ref, tol),
+                                name << " heat capacity " << value << " against " << ref
+                                     << " at T = " << T.value() << ", w = " << w);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(LaliberteWaterHeatCapacity, Scalar, Types)
+{
+    using HeatCapacity = Opm::LaliberteHeatCapacity<Scalar>;
+    const Scalar tol = std::is_same_v<Scalar, float> ? 1e-6 : 1e-10;
+
+    // Table 1 values at the nodes
+    BOOST_CHECK_CLOSE(HeatCapacity::water(Scalar(273.15)), Scalar(4219.44), tol);
+    BOOST_CHECK_CLOSE(HeatCapacity::water(Scalar(298.15)), Scalar(4181.9), tol);
+    BOOST_CHECK_CLOSE(HeatCapacity::water(Scalar(413.15)), Scalar(4286.04), tol);
+
+    // Between nodes, eq 9 through the node at or below t and the next two: at 3.56 C the
+    // nodes are 0, 5 and 10 C
+    const Scalar x = 3.56 / 5.0;
+    const Scalar expected
+        = 4219.44 + (4204.95 - 4219.44) * x + 0.5 * (4195.45 - 2 * 4204.95 + 4219.44) * x * (x - 1);
+    BOOST_CHECK_CLOSE(HeatCapacity::water(Scalar(276.71)), expected, tol);
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteEnthalpy, Scalar, Types)
+{
+    // Derivative with respect to temperature only
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 1>;
+    using H2O = Opm::SimpleHuDuanH2O<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    const Scalar tol = std::is_same_v<Scalar, float> ? 1e-3 : 1e-8;
+    const Evaluation p(2.0e7);
+
+    // Pure water gives the water enthalpy
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    const Evaluation T0 = Evaluation::createVariable(323.15, 0);
+    BOOST_CHECK_CLOSE(BrineDyn::liquidEnthalpyLaliberte(T0, p, water).value(),
+                      H2O::liquidEnthalpy(T0, p).value(),
+                      tol);
+
+    for (const auto& pairing : Electrolytes::pairings) {
+        if (Electrolytes::isNeutral(pairing)) {
+            continue;
+        }
+        const auto saltArray = singleElectrolyte<Evaluation>(pairing, 0.05);
+        const std::string name = electrolyteName(pairing.electrolyte);
+
+        // The temperature derivative is the heat capacity with water at pressure
+        for (const Scalar t : {-10.0, 0.5, 25.0, 61.3, 99.9, 140.0}) {
+            const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+            const Evaluation h = BrineDyn::liquidEnthalpyLaliberte(T, p, saltArray);
+            const Evaluation cpW(H2O::liquidEnthalpy(T, p).derivative(0));
+            const Scalar cp = BrineDyn::liquidHeatCapacityLaliberte(T, saltArray, cpW).value();
+            BOOST_CHECK_MESSAGE(close_at_tolerance(h.derivative(0), cp, tol),
+                                name << " dh/dT " << h.derivative(0) << " against " << cp
+                                     << " at t = " << t);
+        }
+
+        // Enthalpy change from 20 to 80 C against the heat capacity integrated by Simpson's
+        // rule with 1 C steps
+        const auto enthalpy = [&](Scalar t) {
+            return BrineDyn::liquidEnthalpyLaliberte(Evaluation(t + 273.15), p, saltArray).value();
+        };
+        const auto heatCapacity = [&](Scalar t) {
+            const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+            const Evaluation cpW(H2O::liquidEnthalpy(T, p).derivative(0));
+            return BrineDyn::liquidHeatCapacityLaliberte(T, saltArray, cpW).value();
+        };
+        Scalar integral = 0.0;
+        for (int k = 20; k < 80; ++k) {
+            integral += (heatCapacity(k) + 4 * heatCapacity(k + 0.5) + heatCapacity(k + 1)) / 6;
+        }
+        BOOST_CHECK_MESSAGE(close_at_tolerance(enthalpy(80) - enthalpy(20), integral, tol),
+                            name << " enthalpy change " << enthalpy(80) - enthalpy(20)
+                                 << " against " << integral);
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineDriesnerEnthalpy, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 1>;
+    using H2O = Opm::H2O<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+    const Evaluation p(1.0e6);
+
+    // Pure water gives the water enthalpy
+    const Evaluation T0(323.15);
+    BOOST_CHECK_CLOSE(BrineDyn::liquidEnthalpyDriesner(T0, p, Evaluation(0.0)).value(),
+                      H2O::liquidEnthalpy(T0, p).value(),
+                      isFloat ? Scalar(1e-3) : Scalar(1e-9));
+
+    const auto nacl
+        = Electrolytes::pairings[static_cast<std::size_t>(Electrolytes::Electrolyte::NaCl)];
+    for (const Scalar w : {0.05, 0.1, 0.2, 0.25}) {
+        for (const Scalar t : {5.0, 25.0, 50.0, 75.0, 100.0}) {
+            const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+
+            // Heat capacity (eq 27) is the temperature derivative of enthalpy
+            const Evaluation h = BrineDyn::liquidEnthalpyDriesner(T, p, Evaluation(w));
+            const Scalar cp = BrineDyn::liquidHeatCapacityDriesner(T, p, Evaluation(w)).value();
+            BOOST_CHECK_CLOSE(h.derivative(0), cp, isFloat ? Scalar(1e-2) : Scalar(1e-6));
+
+            // Driesner runs 1 to 4% above Laliberte for NaCl at low pressure; the paper notes
+            // its heat capacity is high at high salinity and moderate pressure
+            const auto saltArray = singleElectrolyte<Evaluation>(nacl, w);
+            const Scalar cpLal = BrineDyn::liquidHeatCapacityLaliberte(T, saltArray).value();
+            BOOST_CHECK_MESSAGE(cp / cpLal > 1.0 && cp / cpLal < 1.05,
+                                "w = " << w << ", t = " << t << ": " << cp << " against " << cpLal);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteDriesner, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 1>;
+    using H2O = Opm::H2O<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+    const Scalar tol = isFloat ? 1e-2 : 1e-5; // [%]
+    const Evaluation p(2.0e7);
+
+    // A basin-type brine and NaCl at the same mass fraction [mol/kg water]
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::NA] = 2.5;
+    molal[Opm::SaltIndex::CA] = 0.8;
+    molal[Opm::SaltIndex::MG] = 0.1;
+    molal[Opm::SaltIndex::K] = 0.1;
+    molal[Opm::SaltIndex::CL] = 4.4;
+    molal[Opm::SaltIndex::B] = 0.01;
+    const auto brine = molal.template convert_to<Opm::SaltMassFraction>();
+    const auto pairing
+        = Electrolytes::pairings[static_cast<std::size_t>(Electrolytes::Electrolyte::NaCl)];
+    const auto nacl = singleElectrolyte<Evaluation>(pairing, 0.2);
+
+    const auto cpOf = [&](const auto& salinity, Scalar t) {
+        const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+        return BrineDyn::liquidHeatCapacityLaliberteDriesner(T, p, salinity);
+    };
+    const auto hOf = [&](const auto& salinity, Scalar t) {
+        const Evaluation T = Evaluation::createVariable(t + 273.15, 0);
+        return BrineDyn::liquidEnthalpyLaliberteDriesner(T, p, salinity);
+    };
+
+    // dh/dT is the heat capacity everywhere, across both ends of the blend
+    for (const Scalar t : {25.0, 94.999, 95.001, 96.0, 97.5, 99.0, 99.999, 100.001, 150.0, 250.0}) {
+        BOOST_CHECK_CLOSE(hOf(brine, t).derivative(0), cpOf(brine, t).value(), tol);
+    }
+
+    // No jump in enthalpy or heat capacity at either end of the blend
+    for (const Scalar t : {95.0, 100.0}) {
+        const Scalar d = isFloat ? 0.1 : 1e-4;
+        const Scalar cp = cpOf(brine, t).value();
+        BOOST_CHECK_CLOSE(hOf(brine, t + d).value() - hOf(brine, t - d).value(), 2 * d * cp, 0.1);
+        BOOST_CHECK_CLOSE(cpOf(brine, t + d).value(), cpOf(brine, t - d).value(), 1e-2);
+    }
+
+    // Laliberte below the blend, with water at pressure
+    const Evaluation T50 = Evaluation::createVariable(323.15, 0);
+    const Evaluation cpW(H2O::liquidHeatCapacity(T50, p));
+    BOOST_CHECK_CLOSE(cpOf(brine, 50.0).value(),
+                      BrineDyn::liquidHeatCapacityLaliberte(T50, brine, cpW).value(),
+                      tol);
+
+    // Above the blend, a NaCl brine is Driesner itself, in heat capacity and enthalpy
+    const Evaluation T200 = Evaluation::createVariable(473.15, 0);
+    const Evaluation w(0.2);
+    BOOST_CHECK_CLOSE(
+        cpOf(nacl, 200.0).value(), BrineDyn::liquidHeatCapacityDriesner(T200, p, w).value(), tol);
+    BOOST_CHECK_CLOSE(
+        hOf(nacl, 200.0).value(), BrineDyn::liquidEnthalpyDriesner(T200, p, w).value(), tol);
+
+    // Composition still counts above the blend: without boron, the Ca-rich brine stays below
+    // NaCl at the same salt mass fraction
+    molal[Opm::SaltIndex::B] = 0.0;
+    const auto salts = molal.template convert_to<Opm::SaltMassFraction>();
+    const auto naclSame = singleElectrolyte<Evaluation>(pairing, salts.sum().value());
+    BOOST_CHECK(cpOf(salts, 200.0).value() < 0.99 * cpOf(naclSame, 200.0).value());
 }
 
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
