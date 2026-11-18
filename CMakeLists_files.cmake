@@ -955,6 +955,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/common/utility/MemPacker.hpp
   opm/common/utility/OpmInputError.hpp
   opm/common/utility/SaltArray.hpp
+  opm/common/utility/ElectrolyteFractions.hpp
   opm/common/utility/SaltElectrolytes.hpp
   opm/common/utility/Serializer.hpp
   opm/common/utility/SparseTable.hpp

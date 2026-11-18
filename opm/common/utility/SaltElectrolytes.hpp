@@ -20,6 +20,7 @@
 #ifndef OPM_SALTELECTROLYTES_HPP
 #define OPM_SALTELECTROLYTES_HPP
 
+#include <opm/common/utility/ElectrolyteFractions.hpp>
 #include <opm/common/utility/FixedCapacityList.hpp>
 #include <opm/common/utility/SaltArray.hpp>
 
@@ -59,6 +60,7 @@ public:
     // clang-format on
 
     static constexpr std::size_t numElectrolytes = static_cast<std::size_t>(Electrolyte::NUM);
+    static_assert(numElectrolytes == numBrineElectrolytes);
 
     /// How ions are paired into electrolytes
     enum class PairingMethod {

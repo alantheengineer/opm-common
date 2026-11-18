@@ -391,3 +391,120 @@ BOOST_AUTO_TEST_CASE(MultiplexerCopy)
     BOOST_CHECK(copy.getRealPvt<Opm::WaterPvtApproach::BrineMulticomp>() == pvt);
     BOOST_CHECK_CLOSE(copy.waterReferenceDensity(1), multiplexer.waterReferenceDensity(1), 1e-12);
 }
+
+namespace
+{
+
+// The parts of a fluid state the brine PVT reads
+template <class Evaluation>
+struct CellFluidState
+{
+    using ValueType = Evaluation;
+    static constexpr unsigned waterPhaseIdx = 0;
+
+    const Evaluation& temperature(unsigned) const
+    {
+        return T;
+    }
+    const Evaluation& pressure(unsigned) const
+    {
+        return p;
+    }
+    const Evaluation& saltConcentration() const
+    {
+        return salt;
+    }
+    const Opm::ElectrolyteFractions* brineComposition() const
+    {
+        return composition;
+    }
+
+    Evaluation T;
+    Evaluation p;
+    Evaluation salt;
+    const Opm::ElectrolyteFractions* composition = nullptr;
+};
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(CellCompositionMatchesRegion)
+{
+    const Setup setup(deckWith("", salinitc));
+    Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+    const auto& pvt = brinePvt(multiplexer, setup);
+
+    // A cell with the region's own ratios gives the region's properties
+    const auto cell = pvt.cellFractions(pvt.salinity(1));
+    const double c = 150.0;
+    CellFluidState<double> fs {tRes, pRes, c, &cell};
+    const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 1);
+    BOOST_CHECK_CLOSE(b, pvt.inverseFormationVolumeFactor(1, tRes, pRes, 0.0, c), 1e-5);
+    BOOST_CHECK_CLOSE(mu, pvt.viscosity(1, tRes, pRes, 0.0, c), 1e-5);
+    BOOST_CHECK_CLOSE(pvt.internalEnergy(1, tRes, pRes, 0.0, c, &cell),
+                      pvt.internalEnergy(1, tRes, pRes, 0.0, c),
+                      1e-5);
+
+    // No fractions means the region's
+    fs.composition = nullptr;
+    const auto [bRegion, muRegion] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 1);
+    BOOST_CHECK_EQUAL(bRegion, pvt.inverseFormationVolumeFactor(1, tRes, pRes, 0.0, c));
+    BOOST_CHECK_EQUAL(muRegion, pvt.viscosity(1, tRes, pRes, 0.0, c));
+}
+
+BOOST_AUTO_TEST_CASE(CellCompositionOwnRatios)
+{
+    const Setup setup(deckWith("", salinitc));
+    Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+    const auto& pvt = brinePvt(multiplexer, setup);
+
+    // Region 1 deck, but this cell holds a lithium-rich chloride brine
+    Opm::SaltArray<double, Opm::SaltMolality> molality;
+    molality[SaltIndex::NA] = 1.0;
+    molality[SaltIndex::LI] = 1.5;
+    molality[SaltIndex::CA] = 0.2;
+    molality[SaltIndex::CL] = 2.9;
+    const auto ions = molality.convert_to<Opm::SaltMassFraction>();
+    const auto cell = pvt.cellFractions(ions);
+
+    const double c = 120.0;
+    const double w = pvt.saltMassFraction(0, c);
+    const auto brine = scaled(ions, w);
+    CellFluidState<double> fs {tRes, pRes, c, &cell};
+    const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 0);
+
+    // Float fractions limit the match to about 1e-7
+    const double rhoRef = pvt.waterReferenceDensity(0);
+    BOOST_CHECK_CLOSE(b * rhoRef, Brine::liquidDensityMaoDuan(tRes, pRes, brine), 1e-4);
+    BOOST_CHECK_CLOSE(mu, Brine::liquidViscosityMaoDuan(tRes, pRes, brine), 1e-4);
+
+    // Lithium chloride is lighter than the region's brine at the same salt
+    BOOST_CHECK(b < pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, c));
+
+    // The multiplexer passes the fractions on for internal energy
+    const double h = Brine::liquidEnthalpyLaliberteDriesner(tRes, pRes, brine);
+    const double rho = Brine::liquidDensityMaoDuan(tRes, pRes, brine);
+    BOOST_CHECK_CLOSE(
+        multiplexer.internalEnergy(0u, tRes, pRes, 0.0, c, &cell), h - pRes / rho, 1e-4);
+}
+
+BOOST_AUTO_TEST_CASE(CellFractionsSumToPaired)
+{
+    const Setup setup(deckWith("", salinitc));
+    Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+    const auto& pvt = brinePvt(multiplexer, setup);
+
+    // Charge-balanced ions pair completely, so the fractions sum to one
+    const auto cell = pvt.cellFractions(pvt.salinity(0));
+    double sum = 0.0;
+    for (const float f : cell) {
+        BOOST_CHECK(f >= 0.0f);
+        sum += f;
+    }
+    BOOST_CHECK_CLOSE(sum, 1.0, 1e-4);
+
+    // No salt gives no fractions
+    const auto empty = pvt.cellFractions(Salinity {});
+    for (const float f : empty) {
+        BOOST_CHECK_EQUAL(f, 0.0f);
+    }
+}

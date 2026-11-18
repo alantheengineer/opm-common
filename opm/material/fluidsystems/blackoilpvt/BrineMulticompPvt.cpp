@@ -204,6 +204,22 @@ BrineMulticompPvt<Scalar>::initEnd()
 }
 
 template <class Scalar>
+ElectrolyteFractions
+BrineMulticompPvt<Scalar>::cellFractions(const SaltArray<Scalar, SaltMassFraction>& ions) const
+{
+    ElectrolyteFractions result {};
+    const Scalar total = ions.sum();
+    if (!(total > 0.0)) {
+        return result;
+    }
+    for (const auto& [electrolyte, w] :
+         SaltElectrolytes<Scalar>::fromSaltComponents(ions, pairing_)) {
+        result[static_cast<std::size_t>(electrolyte)] = static_cast<float>(w / total);
+    }
+    return result;
+}
+
+template <class Scalar>
 bool
 BrineMulticompPvt<Scalar>::operator==(const BrineMulticompPvt& data) const
 {

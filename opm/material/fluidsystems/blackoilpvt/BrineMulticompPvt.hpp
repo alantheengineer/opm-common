@@ -23,6 +23,7 @@
 #ifndef OPM_BRINE_MULTICOMP_PVT_HPP
 #define OPM_BRINE_MULTICOMP_PVT_HPP
 
+#include <opm/common/utility/ElectrolyteFractions.hpp>
 #include <opm/common/utility/SaltArray.hpp>
 #include <opm/common/utility/SaltElectrolytes.hpp>
 
@@ -52,6 +53,9 @@ class Schedule;
  *
  * Ions are paired into electrolytes once per region. Pairing scales with the total salt, so
  * each call only scales the stored electrolyte fractions, with no heap allocation.
+ *
+ * In TRACER mode a cell can carry its own electrolyte fractions, built by cellFractions()
+ * from the ion tracers. Calls given those fractions use them; the rest use the region's.
  */
 template <class Scalar>
 class BrineMulticompPvt
@@ -145,13 +149,39 @@ public:
         return saltConcentration / waterReferenceDensity(regionIdx);
     }
 
-    /// Electrolytes and their mass fractions at the given salt concentration
+    /// Ion mass fractions from SALINITC for a region [kg ion/kg brine]
+    const SaltArray<Scalar, SaltMassFraction>& salinity(unsigned regionIdx) const
+    {
+        return salinity_[regionIdx];
+    }
+
+    /*!
+     * \brief Electrolyte fractions per unit salt for a cell's ion composition.
+     *
+     * \param ions Ion mass fractions of the cell's brine [kg ion/kg brine]
+     */
+    ElectrolyteFractions cellFractions(const SaltArray<Scalar, SaltMassFraction>& ions) const;
+
+    /*!
+     * \brief Electrolytes and their mass fractions at the given salt concentration.
+     *
+     * \param cell The cell's electrolyte fractions, or nullptr for the region's
+     */
     template <class Evaluation>
     ElectrolyteList<Evaluation> electrolytes(unsigned regionIdx,
-                                             const Evaluation& saltConcentration) const
+                                             const Evaluation& saltConcentration,
+                                             const ElectrolyteFractions* cell = nullptr) const
     {
         const Evaluation w = saltMassFraction(regionIdx, saltConcentration);
         ElectrolyteList<Evaluation> result;
+        if (cell) {
+            for (std::size_t i = 0; i < cell->size(); ++i) {
+                if ((*cell)[i] > 0.0f) {
+                    result.push_back({static_cast<Electrolyte>(i), Scalar((*cell)[i]) * w});
+                }
+            }
+            return result;
+        }
         for (const auto& [electrolyte, fraction] : unitElectrolytes_[regionIdx]) {
             result.push_back({electrolyte, fraction * w});
         }
@@ -162,8 +192,20 @@ public:
     Evaluation internalEnergy(unsigned regionIdx,
                               const Evaluation& temperature,
                               const Evaluation& pressure,
-                              const Evaluation& /*Rsw*/,
+                              const Evaluation& Rsw,
                               const Evaluation& saltConcentration) const
+    {
+        return internalEnergy(regionIdx, temperature, pressure, Rsw, saltConcentration, nullptr);
+    }
+
+    /// Internal energy with the cell's electrolyte fractions, or the region's for nullptr
+    template <class Evaluation>
+    Evaluation internalEnergy(unsigned regionIdx,
+                              const Evaluation& temperature,
+                              const Evaluation& pressure,
+                              const Evaluation& /*Rsw*/,
+                              const Evaluation& saltConcentration,
+                              const ElectrolyteFractions* cell) const
     {
         if (enthalpyModel_ == EnthalpyModel::Table) {
             if (internalEnergyCurves_.empty()) {
@@ -171,7 +213,7 @@ public:
             }
             return internalEnergyCurves_[regionIdx].eval(temperature, /*extrapolate=*/true);
         }
-        const auto salts = electrolytes(regionIdx, saltConcentration);
+        const auto salts = electrolytes(regionIdx, saltConcentration, cell);
         const Evaluation h = enthalpyModel_ == EnthalpyModel::Driesner
             ? Brine::liquidEnthalpyLaliberteDriesner(temperature, pressure, salts)
             : Brine::liquidEnthalpyLaliberte(temperature, pressure, salts);
@@ -228,7 +270,8 @@ public:
         const LhsEval& p = decay<LhsEval>(fluidState.pressure(FluidState::waterPhaseIdx));
         const LhsEval& saltConcentration
             = BlackOil::template getSaltConcentration_<FluidState, LhsEval>(fluidState, regionIdx);
-        const auto salts = electrolytes(regionIdx, saltConcentration);
+        const auto salts = electrolytes(
+            regionIdx, saltConcentration, BlackOil::getBrineComposition_(fluidState));
         return {density_(T, p, salts) / referenceDensity_[regionIdx],
                 viscosityFactor_[regionIdx] * viscosity_(T, p, salts)};
     }
