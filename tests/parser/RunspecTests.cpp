@@ -1343,6 +1343,176 @@ BOOST_AUTO_TEST_CASE(SaltmcTest)
     BOOST_CHECK(saltmc.LaliberteCooperDensity());
 }
 
+BOOST_AUTO_TEST_CASE(SaltmcCo2StoreDefaults)
+{
+    const auto deck = Parser {}.parseString(R"(
+        RUNSPEC
+        CO2STORE
+        GAS
+        WATER
+        SALTMC
+        /
+        )");
+    const auto& saltmc = Runspec(deck).multiCompSalt();
+
+    using S = Saltmc;
+    BOOST_CHECK(saltmc.enabled());
+    BOOST_CHECK(!saltmc.LaliberteCooperDensity());
+    BOOST_CHECK(saltmc.transport() == S::Transport::Fixed);
+    BOOST_CHECK(saltmc.preset() == S::Preset::Co2Store);
+    BOOST_CHECK(saltmc.densityModel() == S::DensityModel::LaliberteCooper);
+    BOOST_CHECK(saltmc.viscosityModel() == S::ViscosityModel::Laliberte);
+    BOOST_CHECK(saltmc.enthalpyModel() == S::EnthalpyModel::Thco2mix);
+    BOOST_CHECK(saltmc.rangePolicy() == S::RangePolicy::Warn);
+}
+
+BOOST_AUTO_TEST_CASE(SaltmcBrinePresets)
+{
+    using S = Saltmc;
+    {
+        const auto deck = Parser {}.parseString(R"(
+            RUNSPEC
+            WATER
+            BRINE
+            SALTMC
+            /
+            )");
+        const auto& saltmc = Runspec(deck).multiCompSalt();
+        BOOST_CHECK(saltmc.enabled());
+        BOOST_CHECK(saltmc.preset() == S::Preset::Basin);
+        BOOST_CHECK(saltmc.densityModel() == S::DensityModel::MaoDuanYoung);
+        BOOST_CHECK(saltmc.viscosityModel() == S::ViscosityModel::MaoDuan);
+        BOOST_CHECK(saltmc.enthalpyModel() == S::EnthalpyModel::Driesner);
+    }
+    {
+        const auto deck = Parser {}.parseString(R"(
+            RUNSPEC
+            WATER
+            BRINE
+            SALTMC
+            1* 1* SALAR /
+            )");
+        const auto& saltmc = Runspec(deck).multiCompSalt();
+        BOOST_CHECK(saltmc.preset() == S::Preset::Salar);
+        BOOST_CHECK(saltmc.densityModel() == S::DensityModel::LaliberteCooper);
+        BOOST_CHECK(saltmc.viscosityModel() == S::ViscosityModel::Laliberte);
+        BOOST_CHECK(saltmc.enthalpyModel() == S::EnthalpyModel::Laliberte);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(SaltmcBrineOverrides)
+{
+    const auto deck = Parser {}.parseString(R"(
+        RUNSPEC
+        WATER
+        BRINE
+        SALTMC
+        YES FIXED SALAR 1* MAO_DUAN TABLE CLAMP /
+        )");
+    const auto& saltmc = Runspec(deck).multiCompSalt();
+
+    using S = Saltmc;
+    BOOST_CHECK(saltmc.LaliberteCooperDensity());
+    BOOST_CHECK(saltmc.preset() == S::Preset::Salar);
+    BOOST_CHECK(saltmc.densityModel() == S::DensityModel::LaliberteCooper);
+    BOOST_CHECK(saltmc.viscosityModel() == S::ViscosityModel::MaoDuan);
+    BOOST_CHECK(saltmc.enthalpyModel() == S::EnthalpyModel::Table);
+    BOOST_CHECK(saltmc.rangePolicy() == S::RangePolicy::Clamp);
+}
+
+BOOST_AUTO_TEST_CASE(SaltmcTracerTransport)
+{
+    const auto deck = Parser {}.parseString(R"(
+        RUNSPEC
+        WATER
+        BRINE
+        TRACERS
+        0 2 0 0 /
+        SALTMC
+        1* TRACER /
+        PROPS
+        TRACER
+        LI WAT /
+        DYE WAT /
+        /
+        )");
+    const auto& saltmc = Runspec(deck).multiCompSalt();
+    BOOST_CHECK(saltmc.transport() == Saltmc::Transport::Tracer);
+}
+
+BOOST_AUTO_TEST_CASE(SaltmcInvalid)
+{
+    const auto runspec
+        = [](const std::string& input) { return Runspec(Parser {}.parseString(input)); };
+
+    // Neither BRINE nor CO2STORE
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        WATER
+        SALTMC
+        /
+        )"),
+                      OpmInputError);
+
+    // Unknown option
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        WATER
+        BRINE
+        SALTMC
+        1* 1* 1* PITZER /
+        )"),
+                      OpmInputError);
+
+    // CO2STORE preset without CO2STORE
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        WATER
+        BRINE
+        SALTMC
+        1* 1* CO2STORE /
+        )"),
+                      OpmInputError);
+
+    // Model choice with CO2STORE
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        CO2STORE
+        GAS
+        WATER
+        SALTMC
+        1* 1* 1* MAO_DUAN_YOUNG /
+        )"),
+                      OpmInputError);
+
+    // Basin preset with CO2STORE
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        CO2STORE
+        GAS
+        WATER
+        SALTMC
+        1* 1* BASIN /
+        )"),
+                      OpmInputError);
+
+    // TRACER without an ion tracer
+    BOOST_CHECK_THROW(runspec(R"(
+        RUNSPEC
+        WATER
+        BRINE
+        TRACERS
+        0 1 0 0 /
+        SALTMC
+        1* TRACER /
+        PROPS
+        TRACER
+        DYE WAT /
+        /
+        )"),
+                      OpmInputError);
+}
+
 BOOST_AUTO_TEST_CASE(NetworkDims_no_network)
 {
     {

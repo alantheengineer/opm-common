@@ -1,0 +1,26 @@
+{
+  "name": "BRINELAB",
+  "sections": [
+    "PROPS"
+  ],
+  "requires": [
+    "SALTMC"
+  ],
+  "size": {
+    "keyword": "TABDIMS",
+    "item": "NTPVT"
+  },
+  "items": [
+    {
+      "name": "DATA",
+      "value_type": "DOUBLE",
+      "size_type": "ALL",
+      "dimension": [
+        "Temperature",
+        "Pressure",
+        "Density",
+        "Viscosity"
+      ]
+    }
+  ]
+}

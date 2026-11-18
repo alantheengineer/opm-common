@@ -21,6 +21,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <opm/common/utility/OpmInputError.hpp>
+
 #include <opm/input/eclipse/Parser/ParserKeywords/P.hpp>
 #include <opm/input/eclipse/Parser/Parser.hpp>
 #include <opm/input/eclipse/Deck/Deck.hpp>
@@ -33,12 +35,14 @@
 #include <opm/input/eclipse/EclipseState/Tables/TableManager.hpp>
 
 // keyword specific table classes
+#include <opm/input/eclipse/EclipseState/Tables/BrinelabTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/PermfactTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvtwsaltTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RwgsaltTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/SaltvdTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/PermfactTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltSolubilityTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltsoltTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltvdTable.hpp>
 
 #include <stdexcept>
 #include <iostream>
@@ -207,4 +211,74 @@ BOOST_AUTO_TEST_CASE( Saltsol ) {
     BOOST_CHECK_EQUAL(saltsolTable2.getSaltsolColumn().size(), 1U);
     BOOST_CHECK_CLOSE(saltsolTable2.getSaltsolColumn() [0], 9.0, 1e-5);
     BOOST_CHECK_CLOSE(saltsolTable2.getSaltdenColumn() [0], 2100.0, 1e-5);
+}
+
+BOOST_AUTO_TEST_CASE(SaltsoltAndBrinelab)
+{
+    const auto deck = Opm::Parser {}.parseString(R"(
+RUNSPEC
+WATER
+BRINE
+SALTMC
+/
+TABDIMS
+1 2 /
+PROPS
+SALTSOLT
+ 60  345 1.0
+ 150 370 0.8 /
+ 20  300 1.0
+ 50  310 1*
+ 80  320 0.5 /
+BRINELAB
+ 90  250 1172 0.69
+ 140 450 1150 0.48 /
+ 25  1   1100 1.10 /
+)");
+
+    const Opm::TableManager tables(deck);
+    const auto& saltsolt = tables.getSaltsoltTables();
+    BOOST_REQUIRE_EQUAL(saltsolt.size(), 2U);
+
+    const auto& first = saltsolt.getTable<Opm::SaltsoltTable>(0);
+    BOOST_CHECK_EQUAL(first.numRows(), 2U);
+    BOOST_CHECK_CLOSE(first.getTemperatureColumn()[1], 150.0 + 273.15, 1e-8);
+    BOOST_CHECK_CLOSE(first.getSolubilityColumn()[1], 370.0, 1e-8);
+    BOOST_CHECK_CLOSE(first.getMaxSaturationColumn()[1], 0.8, 1e-8);
+
+    // Defaulted S_max is interpolated in temperature
+    const auto& second = saltsolt.getTable<Opm::SaltsoltTable>(1);
+    BOOST_CHECK_EQUAL(second.numRows(), 3U);
+    BOOST_CHECK_CLOSE(second.getMaxSaturationColumn()[1], 0.75, 1e-8);
+
+    const auto& brinelab = tables.getBrinelabTables();
+    BOOST_REQUIRE_EQUAL(brinelab.size(), 2U);
+
+    const auto& lab = brinelab.getTable<Opm::BrinelabTable>(0);
+    BOOST_CHECK_EQUAL(lab.numRows(), 2U);
+    BOOST_CHECK_CLOSE(lab.getTemperatureColumn()[0], 90.0 + 273.15, 1e-8);
+    BOOST_CHECK_CLOSE(lab.getPressureColumn()[0], 250.0e5, 1e-8);
+    BOOST_CHECK_CLOSE(lab.getDensityColumn()[0], 1172.0, 1e-8);
+    BOOST_CHECK_CLOSE(lab.getViscosityColumn()[1], 0.48e-3, 1e-8);
+
+    BOOST_CHECK_EQUAL(brinelab.getTable<Opm::BrinelabTable>(1).numRows(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(SaltsoltTemperatureOrder)
+{
+    const auto deck = Opm::Parser {}.parseString(R"(
+RUNSPEC
+WATER
+BRINE
+SALTMC
+/
+TABDIMS
+/
+PROPS
+SALTSOLT
+ 150 370 1.0
+ 60  345 1.0 /
+)");
+
+    BOOST_CHECK_THROW(Opm::TableManager {deck}, Opm::OpmInputError);
 }

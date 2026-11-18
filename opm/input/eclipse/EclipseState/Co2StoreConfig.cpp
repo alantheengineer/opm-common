@@ -35,6 +35,7 @@
 #include <opm/input/eclipse/Parser/ParserKeywords/T.hpp>
 #include <opm/input/eclipse/Parser/ParserKeywords/V.hpp>
 
+#include <algorithm>
 #include <cstddef>
 
 #include <fmt/format.h>
@@ -143,7 +144,7 @@ namespace Opm {
             SaltArray<double, SaltMolality> salinityArray;
             salinityArray[SaltIndex::NA] = molality;
             salinityArray[SaltIndex::CL] = molality;
-            saltArray = salinityArray.convert_to<SaltMassFraction>();
+            saltArrays.front() = salinityArray.convert_to<SaltMassFraction>();
         }
         else if (props_section.hasKeyword<ParserKeywords::SALTMF>()) {
             const auto& mole_frac = deck["SALTMF"].back().getRecord(0).getItem<ParserKeywords::SALTMF::MOLE_FRACTION>().get<double>(0);
@@ -151,18 +152,18 @@ namespace Opm {
             double mfNaAndCl = mole_frac / (1.0 + mole_frac);
             saltmfArray[SaltIndex::NA] = mfNaAndCl;
             saltmfArray[SaltIndex::CL] = mfNaAndCl;
-            saltArray = saltmfArray.convert_to<SaltMassFraction>();
+            saltArrays.front() = saltmfArray.convert_to<SaltMassFraction>();
         } else if (props_section.hasKeyword<ParserKeywords::SALINITC>()) {
-            const auto& salinitc = deck["SALINITC"].back().getRecord(0);
-            SaltArray<double, SaltMolality> salinitcArray;
-            salinitcArray.assignFromDeckRecord(salinitc);
-            saltArray = salinitcArray.convert_to<SaltMassFraction>();
-            const double unpaired = SaltElectrolytes<double>::unpairedMolality(saltArray);
-            if (unpaired > SaltElectrolytes<double>::molalTolerance) {
-                OpmLog::warning(fmt::format("SALINITC: {:.6f} mol/kg of the salt ions do not "
-                                            "pair into supported electrolytes and are left out "
-                                            "of the brine properties.",
-                                            unpaired));
+            initSalinitc(deck["SALINITC"].back(), tabdims.getNumPVTTables());
+            const bool co2store = deck.hasKeyword<ParserKeywords::CO2STORE>()
+                || deck.hasKeyword<ParserKeywords::CO2STOR>();
+            const bool varies
+                = std::any_of(saltArrays.begin() + 1, saltArrays.end(), [this](const auto& salt) {
+                      return salt != saltArrays.front();
+                  });
+            if (co2store && varies) {
+                OpmLog::warning(
+                    "SALINITC: CO2STORE uses the composition of PVT region 1 in every region.");
             }
         }
 
@@ -186,7 +187,51 @@ namespace Opm {
     const SaltArray<double, SaltMassFraction>&
     Co2StoreConfig::saltComponents() const
     {
-        return saltArray;
+        return saltArrays.front();
+    }
+
+    const SaltArray<double, SaltMassFraction>&
+    Co2StoreConfig::saltComponents(const std::size_t pvtRegionIdx) const
+    {
+        return saltArrays.at(pvtRegionIdx);
+    }
+
+    std::size_t
+    Co2StoreConfig::numSaltRegions() const
+    {
+        return saltArrays.size();
+    }
+
+    void
+    Co2StoreConfig::initSalinitc(const DeckKeyword& keyword, const std::size_t numPvtRegions)
+    {
+        saltArrays.resize(numPvtRegions);
+        for (std::size_t regionIdx = 0; regionIdx < numPvtRegions; ++regionIdx) {
+            const auto& record = keyword.getRecord(regionIdx);
+            for (const auto& item : record) {
+                if (item.get<double>(0) < 0.0) {
+                    const auto msg = fmt::format("SALINITC: negative {} molality in PVT region {}",
+                                                 item.name(),
+                                                 regionIdx + 1);
+                    throw OpmInputError(msg, keyword.location());
+                }
+            }
+
+            SaltArray<double, SaltMolality> molality;
+            molality.assignFromDeckRecord(record);
+            saltArrays[regionIdx] = molality.convert_to<SaltMassFraction>();
+
+            const double unpaired
+                = SaltElectrolytes<double>::unpairedMolality(saltArrays[regionIdx]);
+            if (unpaired > SaltElectrolytes<double>::molalTolerance) {
+                OpmLog::warning(
+                    fmt::format("SALINITC: {:.6f} mol/kg of the salt ions in PVT region {} "
+                                "do not pair into supported electrolytes and are left out "
+                                "of the brine properties.",
+                                unpaired,
+                                regionIdx + 1));
+            }
+        }
     }
 
     int Co2StoreConfig::actco2s() const {
@@ -194,14 +239,10 @@ namespace Opm {
     }
 
     bool Co2StoreConfig::operator==(const Co2StoreConfig& other) const {
-        return this->brine_type == other.brine_type
-                && this->liquid_type == other.liquid_type
-                && this->gas_type == other.gas_type
-                && this->denaqa_tables == other.denaqa_tables
-                && this->viscaqa_tables == other.viscaqa_tables
-                && this->saltArray == other.saltArray
-                && this->activityModel == other.activityModel
-                && this->cnames == other.cnames;
+        return this->brine_type == other.brine_type && this->liquid_type == other.liquid_type
+            && this->gas_type == other.gas_type && this->denaqa_tables == other.denaqa_tables
+            && this->viscaqa_tables == other.viscaqa_tables && this->saltArrays == other.saltArrays
+            && this->activityModel == other.activityModel && this->cnames == other.cnames;
     }
 
     enum class SaltMixingType {

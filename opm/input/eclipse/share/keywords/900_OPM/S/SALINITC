@@ -10,7 +10,10 @@
   "requires": [
     "SALTMC"
   ],
-  "size": 1,
+  "size": {
+    "keyword": "TABDIMS",
+    "item": "NTPVT"
+  },
   "items": [
     {
       "name": "NA",
@@ -39,6 +42,36 @@
     },
     {
       "name": "SO4",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "LI",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "SR",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "BR",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "HCO3",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "CO3",
+      "value_type": "DOUBLE",
+      "default": 0.0
+    },
+    {
+      "name": "B",
       "value_type": "DOUBLE",
       "default": 0.0
     }

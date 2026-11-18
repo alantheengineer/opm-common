@@ -27,6 +27,7 @@
 
 #include <opm/input/eclipse/EclipseState/Tables/AqutabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/BiofilmTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/BrinelabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/CompvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/DiffMICPTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/EnkrvdTable.hpp>
@@ -43,8 +44,8 @@
 #include <opm/input/eclipse/EclipseState/Tables/OilvisctTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/OverburdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PbvdTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/PdvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PcfactTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/PdvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PermfactTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PlyadsTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PlydhflfTable.hpp>
@@ -55,7 +56,6 @@
 #include <opm/input/eclipse/EclipseState/Tables/PmiscTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvdgTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvdoTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/RsconstTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvdsTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvtgTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/PvtgwTable.hpp>
@@ -65,6 +65,7 @@
 #include <opm/input/eclipse/EclipseState/Tables/RocktabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RocktabhTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RockwnodTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/RsconstTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RsvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RtempvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RvvdTable.hpp>
@@ -72,6 +73,7 @@
 #include <opm/input/eclipse/EclipseState/Tables/RwgsaltTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltSolubilityTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltsoltTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SgcwmisTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SgfnTable.hpp>
@@ -788,6 +790,68 @@ SpecheatTable::getCvWaterColumn() const
 
 const TableColumn&
 SpecheatTable::getCvGasColumn() const
+{
+    return SimpleTable::getColumn(3);
+}
+
+SaltsoltTable::SaltsoltTable(const DeckItem& item, const int tableID)
+{
+    m_schema.addColumn(
+        ColumnSchema("TEMPERATURE", Table::STRICTLY_INCREASING, Table::DEFAULT_NONE));
+    m_schema.addColumn(ColumnSchema("SOLUBILITY", Table::RANDOM, Table::DEFAULT_NONE));
+    m_schema.addColumn(ColumnSchema("SMAX", Table::RANDOM, Table::DEFAULT_LINEAR));
+
+    SimpleTable::init("SALTSOLT", item, tableID);
+}
+
+const TableColumn&
+SaltsoltTable::getTemperatureColumn() const
+{
+    return SimpleTable::getColumn(0);
+}
+
+const TableColumn&
+SaltsoltTable::getSolubilityColumn() const
+{
+    return SimpleTable::getColumn(1);
+}
+
+const TableColumn&
+SaltsoltTable::getMaxSaturationColumn() const
+{
+    return SimpleTable::getColumn(2);
+}
+
+BrinelabTable::BrinelabTable(const DeckItem& item, const int tableID)
+{
+    m_schema.addColumn(ColumnSchema("TEMPERATURE", Table::RANDOM, Table::DEFAULT_NONE));
+    m_schema.addColumn(ColumnSchema("PRESSURE", Table::RANDOM, Table::DEFAULT_NONE));
+    m_schema.addColumn(ColumnSchema("DENSITY", Table::RANDOM, Table::DEFAULT_NONE));
+    m_schema.addColumn(ColumnSchema("VISCOSITY", Table::RANDOM, Table::DEFAULT_NONE));
+
+    SimpleTable::init("BRINELAB", item, tableID);
+}
+
+const TableColumn&
+BrinelabTable::getTemperatureColumn() const
+{
+    return SimpleTable::getColumn(0);
+}
+
+const TableColumn&
+BrinelabTable::getPressureColumn() const
+{
+    return SimpleTable::getColumn(1);
+}
+
+const TableColumn&
+BrinelabTable::getDensityColumn() const
+{
+    return SimpleTable::getColumn(2);
+}
+
+const TableColumn&
+BrinelabTable::getViscosityColumn() const
 {
     return SimpleTable::getColumn(3);
 }

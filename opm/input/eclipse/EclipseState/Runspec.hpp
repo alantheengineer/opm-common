@@ -612,6 +612,14 @@ private:
 class Saltmc
 {
 public:
+    enum class Transport { Fixed, Tracer };
+    enum class Preset { Basin, Salar, Co2Store };
+    enum class DensityModel { MaoDuanYoung, LaliberteCooper };
+    enum class ViscosityModel { MaoDuan, Laliberte };
+    // Thco2mix: the CO2STORE water model, with mixing set by THCO2MIX
+    enum class EnthalpyModel { Driesner, Laliberte, Table, Thco2mix };
+    enum class RangePolicy { Warn, Clamp, Error };
+
     Saltmc() = default;
     explicit Saltmc(const Deck&);
 
@@ -627,6 +635,37 @@ public:
         return m_laliberte_cooper_density;
     }
 
+    Transport transport() const
+    {
+        return m_transport;
+    }
+
+    Preset preset() const
+    {
+        return m_preset;
+    }
+
+    // Models with the preset applied
+    DensityModel densityModel() const
+    {
+        return m_density_model;
+    }
+
+    ViscosityModel viscosityModel() const
+    {
+        return m_viscosity_model;
+    }
+
+    EnthalpyModel enthalpyModel() const
+    {
+        return m_enthalpy_model;
+    }
+
+    RangePolicy rangePolicy() const
+    {
+        return m_range_policy;
+    }
+
     static Saltmc serializationTestObject();
 
     template<class Serializer>
@@ -634,11 +673,23 @@ public:
     {
         serializer(m_activated);
         serializer(m_laliberte_cooper_density);
+        serializer(m_transport);
+        serializer(m_preset);
+        serializer(m_density_model);
+        serializer(m_viscosity_model);
+        serializer(m_enthalpy_model);
+        serializer(m_range_policy);
     }
 
 private:
     bool m_activated{false};
     bool m_laliberte_cooper_density{false};
+    Transport m_transport {Transport::Fixed};
+    Preset m_preset {Preset::Co2Store};
+    DensityModel m_density_model {DensityModel::LaliberteCooper};
+    ViscosityModel m_viscosity_model {ViscosityModel::Laliberte};
+    EnthalpyModel m_enthalpy_model {EnthalpyModel::Thco2mix};
+    RangePolicy m_range_policy {RangePolicy::Warn};
 };
 
 
