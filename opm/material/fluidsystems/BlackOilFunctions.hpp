@@ -28,6 +28,7 @@
 #define OPM_MATERIAL_FLUIDSYSTEMS_BLACKOILFUNCTIONS_HEADER_INCLUDED
 
 #include <opm/common/TimingMacros.hpp>
+#include <opm/common/utility/ElectrolyteFractions.hpp>
 
 #include <opm/material/Constants.hpp>
 #include <opm/material/fluidsystems/BaseFluidSystem.hpp>
@@ -75,6 +76,9 @@ template <class State>
 concept HasSaltConcentration = requires (const State& fs) {
     fs.saltConcentration();
 };
+
+template <class State>
+concept HasBrineComposition = requires(const State& fs) { fs.brineComposition(); };
 
 template <class State>
 concept HasSaltSaturation = requires (const State& fs) {
@@ -175,6 +179,18 @@ getSaltConcentration_(const FluidState& fluidState, unsigned)
         return decay<LhsEval>(fluidState.saltConcentration());
     } else {
         return 0.0;
+    }
+}
+
+// Per-cell electrolyte fractions, or nullptr when the brine has fixed ratios per region
+template <class FluidState>
+OPM_HOST_DEVICE const ElectrolyteFractions*
+getBrineComposition_(const FluidState& fluidState)
+{
+    if constexpr (FluidStateConcepts::HasBrineComposition<FluidState>) {
+        return fluidState.brineComposition();
+    } else {
+        return nullptr;
     }
 }
 

@@ -151,6 +151,23 @@ public:
                         const Evaluation& saltconcentration) const
     { OPM_WATER_PVT_MULTIPLEXER_CALL(return pvtImpl.internalEnergy(regionIdx, temperature, pressure, Rsw, saltconcentration)); }
 
+    /// Internal energy with a cell's brine electrolyte fractions; only the multicomponent
+    /// brine uses them
+    template <class Evaluation>
+    Evaluation internalEnergy(unsigned regionIdx,
+                              const Evaluation& temperature,
+                              const Evaluation& pressure,
+                              const Evaluation& Rsw,
+                              const Evaluation& saltconcentration,
+                              const ElectrolyteFractions* composition) const
+    {
+        if (approach_ == WaterPvtApproach::BrineMulticomp) {
+            return getRealPvt<WaterPvtApproach::BrineMulticomp>().internalEnergy(
+                regionIdx, temperature, pressure, Rsw, saltconcentration, composition);
+        }
+        return internalEnergy(regionIdx, temperature, pressure, Rsw, saltconcentration);
+    }
+
     Scalar hVap(unsigned regionIdx) const;
 
     /*!

@@ -284,6 +284,7 @@ friend class BlackOilFluidState;
         }
         if constexpr (enableBrine){
             setSaltConcentration(BlackOil::getSaltConcentration_<FluidState, ValueType>(fs, pvtRegionIdx));
+            setBrineComposition(BlackOil::getBrineComposition_(fs));
         }
         if constexpr (enableSaltPrecipitation){
             setSaltSaturation(BlackOil::getSaltSaturation_<FluidSystem, FluidState, ValueType>(fs, pvtRegionIdx));
@@ -409,6 +410,18 @@ friend class BlackOilFluidState;
      */
     OPM_HOST_DEVICE void setSaltConcentration(const ValueType& newSaltConcentration)
     { *saltConcentration_ = newSaltConcentration; }
+
+    /*!
+     * \brief Set the cell's electrolyte fractions; nullptr uses the region's.
+     *
+     * The fractions are owned by the caller and must outlive this fluid state.
+     */
+    OPM_HOST_DEVICE void setBrineComposition(const ElectrolyteFractions* composition)
+    {
+        if constexpr (enableBrine) {
+            *brineComposition_ = composition;
+        }
+    }
 
     /*!
      * \brief Set the solid salt saturation.
@@ -554,6 +567,18 @@ friend class BlackOilFluidState;
             return *saltConcentration_;
         } else {
             return ValueType{0.0};
+        }
+    }
+
+    /*!
+     * \brief Return the cell's electrolyte fractions, or nullptr for the region's
+     */
+    OPM_HOST_DEVICE const ElectrolyteFractions* brineComposition() const
+    {
+        if constexpr (enableBrine) {
+            return *brineComposition_;
+        } else {
+            return nullptr;
         }
     }
 
@@ -857,6 +882,7 @@ private:
     ConditionalStorage<enableVapwat,ValueType> Rvw_{};
     ConditionalStorage<enableDissolutionInWater,ValueType> Rsw_{};
     ConditionalStorage<enableBrine, ValueType> saltConcentration_{};
+    ConditionalStorage<enableBrine, const ElectrolyteFractions*> brineComposition_ {};
     ConditionalStorage<enableSaltPrecipitation, ValueType> saltSaturation_{};
     ConditionalStorage<enableSolvent, ValueType> solventSaturation_{};
     ConditionalStorage<enableSolvent, ValueType> solventDensity_{};

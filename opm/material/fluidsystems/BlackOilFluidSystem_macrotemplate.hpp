@@ -1208,10 +1208,19 @@ public:
 
         case waterPhaseIdx:
             if (!waterPvt_.mixingEnergy()) {
-                return waterPvt_.internalEnergy
-                    (regionIdx, T, p,
-                     BlackOil::template getRsw_<ThisType, FluidState, LhsEval>(fluidState, regionIdx),
-                     BlackOil::template getSaltConcentration_<FluidState, LhsEval>(fluidState, regionIdx));
+                const auto Rsw = BlackOil::template getRsw_<ThisType, FluidState, LhsEval>(
+                    fluidState, regionIdx);
+                const auto salt = BlackOil::template getSaltConcentration_<FluidState, LhsEval>(
+                    fluidState, regionIdx);
+                // The multicomponent brine can use the cell's own ion ratios
+                const auto* composition = BlackOil::getBrineComposition_(fluidState);
+                if constexpr (requires {
+                                  waterPvt_.internalEnergy(regionIdx, T, p, Rsw, salt, composition);
+                              }) {
+                    return waterPvt_.internalEnergy(regionIdx, T, p, Rsw, salt, composition);
+                } else {
+                    return waterPvt_.internalEnergy(regionIdx, T, p, Rsw, salt);
+                }
             }
             break;
 

@@ -125,3 +125,37 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(SolventSupport, Scalar, Types)
         BOOST_CHECK_EQUAL(fs2.rsSolw(), Scalar(0.1));
     }
 }
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(BrineCompositionSupport, Scalar, Types)
+{
+    using FluidSystem = Opm::BlackOilFluidSystem<Scalar>;
+
+    // Brine enabled: storeTemp, storeEnthalpy, enableDissolution, enableVapwat, enableBrine
+    using BrineFluidState
+        = Opm::BlackOilFluidState<Scalar, FluidSystem, false, false, true, false, true>;
+    using NoBrineFluidState = Opm::BlackOilFluidState<Scalar, FluidSystem>;
+
+    Opm::ElectrolyteFractions composition {};
+    composition[0] = 0.25f;
+
+    BrineFluidState fs {};
+    BOOST_CHECK(fs.brineComposition() == nullptr);
+    BOOST_CHECK(Opm::BlackOil::getBrineComposition_(fs) == nullptr);
+
+    fs.setBrineComposition(&composition);
+    BOOST_CHECK(fs.brineComposition() == &composition);
+    BOOST_CHECK(Opm::BlackOil::getBrineComposition_(fs) == &composition);
+
+    // Copies keep the pointer, not a copy of the fractions
+    const BrineFluidState copy = fs;
+    BOOST_CHECK(copy.brineComposition() == &composition);
+
+    fs.setBrineComposition(nullptr);
+    BOOST_CHECK(fs.brineComposition() == nullptr);
+
+    // Without brine there is nothing to store and the getter gives nullptr
+    NoBrineFluidState noBrine {};
+    noBrine.setBrineComposition(&composition);
+    BOOST_CHECK(noBrine.brineComposition() == nullptr);
+    BOOST_CHECK(Opm::BlackOil::getBrineComposition_(noBrine) == nullptr);
+}
