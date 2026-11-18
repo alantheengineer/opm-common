@@ -1292,6 +1292,83 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineLaliberteDriesner, Scalar, Types)
     BOOST_CHECK(cpOf(salts, 200.0).value() < 0.99 * cpOf(naclSame, 200.0).value());
 }
 
+BOOST_AUTO_TEST_CASE(DebyeHuckelSlopes)
+{
+    using DH = Opm::DebyeHuckelSlope<double>;
+
+    // Bradley and Pitzer (1979): dielectric constant 78.38 and A_phi 0.391 at 25 C, 1 bar
+    BOOST_CHECK_CLOSE(DH::dielectricConstant(298.15, 1e5), 78.38, 1e-2);
+    BOOST_CHECK_CLOSE(DH::osmoticSlope(298.15, 1e5), 0.3915, 0.1);
+
+    // The table follows the direct calculation above the vapour pressure
+    for (const double T : {280.0, 323.0, 377.7, 421.3, 498.0, 546.2}) {
+        for (const double p : {2.1e6, 1.37e7, 3.3e7, 7.81e7}) {
+            BOOST_CHECK_CLOSE(DH::volumeSlope(T, p), DH::volumeSlopeDirect(T, p), 0.3);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(MaoDuanChlorides, Scalar, Types)
+{
+    using Evaluation = Opm::DenseAd::Evaluation<Scalar, 2>;
+    using MaoDuan = Opm::MaoDuanBrine<Scalar>;
+    using BrineDyn = Opm::BrineDynamic<Scalar, Opm::H2O<Scalar>>;
+    using Electrolytes = Opm::SaltElectrolytes<Scalar>;
+    using E = typename Electrolytes::Electrolyte;
+    const bool isFloat = std::is_same_v<Scalar, float>;
+
+    // Infinite-dilution apparent molar volumes at 25 C and 0.1 MPa from this model, as listed
+    // in Table 5 of Mao and Duan (2008) [cm3/mol]
+    const Evaluation T(298.15);
+    const Evaluation p(1e5);
+    const Evaluation rhoW = MaoDuan::waterDensity(T, p);
+    const std::array<std::pair<E, Scalar>, 6> dilute = {{{E::LiCl, 17.10},
+                                                         {E::NaCl, 16.51},
+                                                         {E::KCl, 27.09},
+                                                         {E::MgCl2, 13.70},
+                                                         {E::CaCl2, 17.43},
+                                                         {E::SrCl2, 17.90}}};
+    for (const auto& [e, ref] : dilute) {
+        const Scalar v = MaoDuan::apparentMolarVolume(e, T, p, Evaluation(1e-9), rhoW).value();
+        BOOST_CHECK_SMALL(v * Scalar(1e6) - ref, Scalar(0.006));
+    }
+
+    // Pure water is IAPWS-97 water
+    const Opm::SaltArray<Evaluation, Opm::SaltMassFraction> water;
+    BOOST_CHECK_CLOSE(BrineDyn::liquidDensityMaoDuan(T, p, water).value(), rhoW.value(), 1e-10);
+
+    // NaCl at 25 C agrees with Laliberte and Cooper
+    const auto nacl = Electrolytes::pairings[static_cast<std::size_t>(E::NaCl)];
+    for (const Scalar w : {0.05, 0.15, 0.25}) {
+        const auto saltArray = singleElectrolyte<Evaluation>(nacl, w);
+        BOOST_CHECK_CLOSE(BrineDyn::liquidDensityMaoDuan(T, p, saltArray).value(),
+                          BrineDyn::liquidDensityMulticompSalt(T, p, saltArray).value(),
+                          0.1);
+    }
+
+    // Derivatives against central differences, for a Ca-Na-Mg-K chloride brine
+    Opm::SaltArray<Evaluation, Opm::SaltMolality> molal;
+    molal[Opm::SaltIndex::NA] = 2.5;
+    molal[Opm::SaltIndex::CA] = 0.8;
+    molal[Opm::SaltIndex::MG] = 0.1;
+    molal[Opm::SaltIndex::K] = 0.1;
+    molal[Opm::SaltIndex::CL] = 4.4;
+    const auto brine = molal.template convert_to<Opm::SaltMassFraction>();
+    const Evaluation T1 = Evaluation::createVariable(393.15, 0);
+    const Evaluation p1 = Evaluation::createVariable(3.0e7, 1);
+    const Evaluation rho = BrineDyn::liquidDensityMaoDuan(T1, p1, brine);
+    const auto rhoAt = [&](Scalar t, Scalar pr) {
+        return BrineDyn::liquidDensityMaoDuan(Evaluation(t), Evaluation(pr), brine).value();
+    };
+    const Scalar dT = isFloat ? 0.5 : 1e-3;
+    const Scalar dp = isFloat ? 1e5 : 1e2;
+    const Scalar tol = isFloat ? 5.0 : 1e-3; // [%]
+    BOOST_CHECK_CLOSE(
+        rho.derivative(0), (rhoAt(393.15 + dT, 3.0e7) - rhoAt(393.15 - dT, 3.0e7)) / (2 * dT), tol);
+    BOOST_CHECK_CLOSE(
+        rho.derivative(1), (rhoAt(393.15, 3.0e7 + dp) - rhoAt(393.15, 3.0e7 - dp)) / (2 * dp), tol);
+}
+
 BOOST_AUTO_TEST_CASE_TEMPLATE(BrineRelativeViscosityBounds, Scalar, Types)
 {
     using Evaluation = Opm::DenseAd::Evaluation<Scalar, 3>;

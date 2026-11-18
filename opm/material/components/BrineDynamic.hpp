@@ -34,6 +34,7 @@
 #include <opm/material/common/MathToolbox.hpp>
 #include <opm/material/components/Component.hpp>
 #include <opm/material/components/LaliberteHeatCapacity.hpp>
+#include <opm/material/components/MaoDuanBrine.hpp>
 
 #include <array>
 #include <cassert>
@@ -433,23 +434,10 @@ public:
             [](const Evaluation& acc, const auto& salt) { return acc + salt.second; });
 
         // Calculate brine density with Eq. (6)
-        Evaluation tempC = temperature - 273.15;
         Evaluation sumAppVolTimesMf = 0.0;
         for (const auto& salt : electrolytes) {
-            if (salt.first == Electrolyte::BOH3) {
-                sumAppVolTimesMf += salt.second * boricAcidSpecificVolume_(temperature);
-                continue;
-            }
-
-            // Get constants
-            const auto c = densityCoefficients(salt.first);
-
-            // Calculate apparent volume with Eq. (10) (where we use (1 - w_H2O) instead of w_i)
-            // multiplied by mass fraction salt electrolyte to get the sum term in Eq. (6)
-            Evaluation tmpExponent = tempC + c[4];
-            sumAppVolTimesMf +=
-                salt.second * (sumSalinity + c[2] + c[3] * tempC)
-                / ((c[0] * sumSalinity + c[1]) * exp(1e-6 * tmpExponent * tmpExponent));
+            sumAppVolTimesMf
+                += salt.second * apparentSpecificVolume_(salt.first, temperature, sumSalinity);
         }
 
         // Calculate the rest of Eq. (6) to get brine density
@@ -772,6 +760,54 @@ public:
         return model.enthalpy(temperature);
     }
 
+    /*!
+     * Density of a basin brine. The chlorides of Li, Na, K, Mg, Ca and Sr use the binary
+     * models of Mao and Duan, J. Chem. Thermodyn. 40, 2008, each evaluated at the brine's total
+     * ionic strength and mixed by Young's rule; the other electrolytes are added as Laliberte
+     * apparent volumes. Water density is IAPWS-97.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Brine density [kg/m3]
+     */
+    template <class Evaluation>
+    static Evaluation liquidDensityMaoDuan(const Evaluation& temperature,
+                                           const Evaluation& pressure,
+                                           const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                           PairingMethod pairing = PairingMethod::Proportional)
+    {
+        using MaoDuan = MaoDuanBrine<Scalar>;
+        using Electrolytes = SaltElectrolytes<Scalar>;
+        const auto electrolytes = Electrolytes::fromSaltComponents(salinity, pairing);
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation rhoW = MaoDuan::waterDensity(temperature, pressure);
+
+        Evaluation ionicStrength = 0.0;
+        for (const auto& salt : electrolytes) {
+            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+        }
+
+        // Per kg of water: mass [kg] and volume [m3]
+        Evaluation mass = 1.0;
+        Evaluation volume = 1.0 / rhoW;
+        for (const auto& salt : electrolytes) {
+            const Scalar mm = Electrolytes::molarMass(salt.first);
+            const Evaluation m = molalityOf_(salt, sumW);
+            mass += m * mm;
+            if (MaoDuan::covers(salt.first)) {
+                const Evaluation mBinary = ionicStrength / ionicStrengthPerMole_(salt.first);
+                volume += m
+                    * MaoDuan::apparentMolarVolume(
+                              salt.first, temperature, pressure, mBinary, rhoW);
+            } else {
+                volume += m * mm * apparentSpecificVolume_(salt.first, temperature, sumW);
+            }
+        }
+        return mass / volume;
+    }
+
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
@@ -790,6 +826,47 @@ private:
     template <class Evaluation>
     using ElectrolyteList_ =
         typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>;
+
+    // Molality from the mass fraction of one electrolyte and the total solute mass fraction
+    template <class Evaluation>
+    static Evaluation molalityOf_(const std::pair<Electrolyte, Evaluation>& salt,
+                                  const Evaluation& sumW)
+    {
+        return salt.second / (SaltElectrolytes<Scalar>::molarMass(salt.first) * (1.0 - sumW));
+    }
+
+    // Ionic strength of one mole of the electrolyte in 1 kg of water
+    static Scalar ionicStrengthPerMole_(const Electrolyte electrolyte)
+    {
+        const auto& p = SaltElectrolytes<Scalar>::pairings[static_cast<std::size_t>(electrolyte)];
+        if (SaltElectrolytes<Scalar>::isNeutral(p)) {
+            return 0.0;
+        }
+        const Scalar zc = ionStrength(p.cation);
+        const Scalar za = ionStrength(p.anion);
+        return 0.5 * (p.cationsPer * zc * zc + p.anionsPer * za * za);
+    }
+
+    /*!
+     * Apparent specific volume of a solute from Laliberte and Cooper (2004), eq 10, using the
+     * total solute mass fraction, or the fitted volume for boric acid
+     *
+     * @return Apparent specific volume [m3/kg]
+     */
+    template <class Evaluation>
+    static Evaluation apparentSpecificVolume_(const Electrolyte electrolyte,
+                                              const Evaluation& temperature,
+                                              const Evaluation& sumW)
+    {
+        if (electrolyte == Electrolyte::BOH3) {
+            return boricAcidSpecificVolume_(temperature);
+        }
+        const auto c = densityCoefficients(electrolyte);
+        const Evaluation tempC = temperature - 273.15;
+        const Evaluation exponent = tempC + c[4];
+        return (sumW + c[2] + c[3] * tempC)
+            / ((c[0] * sumW + c[1]) * exp(1e-6 * exponent * exponent));
+    }
 
     // Laliberte (2009) eq 10. Boric acid has no heat capacity set, so it counts as water.
     template <class Evaluation>
