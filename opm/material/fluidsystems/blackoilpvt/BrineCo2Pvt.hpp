@@ -96,6 +96,8 @@ class BrineCo2Pvt
 public:
     using H2O = SimpleHuDuanH2O<Scalar>;
     using Brine = ::Opm::BrineDynamic<Scalar, H2O>;
+    // CO2STORE keeps the greedy ion pairing it had before proportional pairing was added
+    static constexpr auto legacyPairing = Brine::PairingMethod::Greedy;
     using CO2 = ::Opm::CO2<Scalar, Params>;
 
     //! The binary coefficients for brine and CO2 used by this fluid system
@@ -297,7 +299,7 @@ public:
             return mu_pure * pow(10.0, nacl_exponent * salinityArray.sum());
         }
         if (enableMultiCompSalt_) {
-            return Brine::liquidViscosityMulticompSalt(temperature, salinityArray);
+            return Brine::liquidViscosityMulticompSalt(temperature, salinityArray, legacyPairing);
         }
         return Brine::liquidViscosity(temperature, pressure, salinityArray.sum());
     }
@@ -334,7 +336,7 @@ public:
                                  nacl_exponent * evalSalinity.sum());
         }
         if (enableMultiCompSalt_) {
-            return Brine::liquidViscosityMulticompSalt(temperature, evalSalinity);
+            return Brine::liquidViscosityMulticompSalt(temperature, evalSalinity, legacyPairing);
         }
         return Brine::liquidViscosity(temperature, pressure, evalSalinity.sum());
     }
@@ -607,7 +609,8 @@ public:
                                                                ezrokhiViscNaClCoeff_);
             mu_Brine = mu_H20 * pow(10.0, nacl_exponent * evalSalinity.sum());
         } else if (enableMultiCompSalt_) {
-            mu_Brine = Brine::liquidViscosityMulticompSalt(temperature, evalSalinity);
+            mu_Brine
+                = Brine::liquidViscosityMulticompSalt(temperature, evalSalinity, legacyPairing);
         } else {
             mu_Brine = Brine::liquidViscosity(temperature, pressure, evalSalinity.sum());
         }
@@ -725,9 +728,11 @@ private:
 
         LhsEval rho_brine;
         if (enableMultiCompSalt_) {
-            rho_brine = Brine::liquidDensityMulticompSalt(T, pl, salinity, useH2ODensity_, extrapolate);
+            rho_brine = Brine::liquidDensityMulticompSalt(
+                T, pl, salinity, useH2ODensity_, extrapolate, legacyPairing);
             SaltArray<LhsEval, SaltMassFraction> zeroSalinity;
-            rho_pure = Brine::liquidDensityMulticompSalt(T, pl, zeroSalinity, useH2ODensity_, extrapolate);
+            rho_pure = Brine::liquidDensityMulticompSalt(
+                T, pl, zeroSalinity, useH2ODensity_, extrapolate, legacyPairing);
         } else {
             rho_pure = H2O::liquidDensity(T, pl, extrapolate);
             rho_brine = Brine::liquidDensity(T, pl, salinity.sum(), rho_pure);
@@ -947,7 +952,8 @@ private:
         // Improved estimate using brine density
         LhsEval rho_brine;
         if (enableMultiCompSalt_) {
-            rho_brine = Brine::liquidDensityMulticompSalt(T, P, S, useH2ODensity_, extrapolate);
+            rho_brine = Brine::liquidDensityMulticompSalt(
+                T, P, S, useH2ODensity_, extrapolate, legacyPairing);
         } else {
             rho_brine = Brine::liquidDensity(T, P, S.sum(), extrapolate);
         }

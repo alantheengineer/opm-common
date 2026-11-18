@@ -385,6 +385,7 @@ list(APPEND MAIN_SOURCE_FILES
   opm/material/fluidsystems/PhaseUsageInfo.cpp
   opm/material/fluidsystems/blackoilpvt/BrineCo2Pvt.cpp
   opm/material/fluidsystems/blackoilpvt/BrineH2Pvt.cpp
+  opm/material/fluidsystems/blackoilpvt/BrineMulticompPvt.cpp
   opm/material/fluidsystems/blackoilpvt/Co2GasPvt.cpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityBrinePvt.cpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityOilPvt.cpp
@@ -718,6 +719,7 @@ list(APPEND DUNE_TEST_SOURCE_FILES
   tests/material/test_blackoilfluidstate.cpp
   tests/material/test_blackoilfluidsystem_nonstatic.cpp
   tests/material/test_brine_allocations.cpp
+  tests/material/test_brinemulticomppvt.cpp
   tests/material/test_co2brinepvt.cpp
   tests/material/test_co2brine_ptflash.cpp
   tests/material/test_components.cpp
@@ -1544,6 +1546,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/material/fluidsystems/TwoPhaseImmiscibleFluidSystem.hpp
   opm/material/fluidsystems/blackoilpvt/BrineCo2Pvt.hpp
   opm/material/fluidsystems/blackoilpvt/BrineH2Pvt.hpp
+  opm/material/fluidsystems/blackoilpvt/BrineMulticompPvt.hpp
   opm/material/fluidsystems/blackoilpvt/Co2GasPvt.hpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityBrinePvt.hpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityOilPvt.hpp

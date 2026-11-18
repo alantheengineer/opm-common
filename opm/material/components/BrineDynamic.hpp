@@ -40,7 +40,6 @@
 #include <cassert>
 #include <cstddef>
 #include <limits>
-#include <numeric>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -60,6 +59,9 @@ class BrineDynamic : public Component<Scalar, BrineDynamic<Scalar, H2O> >
 {
 public:
     using PairingMethod = typename SaltElectrolytes<Scalar>::PairingMethod;
+    using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
+    template <class Evaluation>
+    using ElectrolyteList = typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>;
 
     /*!
      * \copydoc Component::name
@@ -423,15 +425,26 @@ public:
         assert(false && "liquidDensityLaliberteCooper is not supported on the GPU");
         return rhow;
 #else
-        // Generate (valid) electrolytes from salt components
-        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidDensityLaliberteCooper(temperature, electrolytes, rhow);
+#endif
+    }
 
-        // Sum of electrolyte mass fractions
-        // OBS: If there are residual salt molalities when generating electrolytes, sumSalinity
-        // will not be equal to salinity.sum(); see SaltElectrolytes::fromSaltComponents()
-        Evaluation sumSalinity = std::accumulate(
-            electrolytes.begin(), electrolytes.end(), Evaluation(0.0),
-            [](const Evaluation& acc, const auto& salt) { return acc + salt.second; });
+    /*!
+     * Density of liquid brine from Laliberte and Cooper (2004), eq 6, for given electrolytes
+     *
+     * @param temperature Temperature [K]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @param rhow Density pure water [kg/m3]
+     * @return Brine density [kg/m3]
+     */
+    template <class Evaluation>
+    static Evaluation liquidDensityLaliberteCooper(const Evaluation& temperature,
+                                                   const ElectrolyteList<Evaluation>& electrolytes,
+                                                   const Evaluation& rhow)
+    {
+        // Unpaired ions are not in the list, so this can be below the ion total
+        const Evaluation sumSalinity = soluteMassFraction_(electrolytes);
 
         // Calculate brine density with Eq. (6)
         Evaluation sumAppVolTimesMf = 0.0;
@@ -442,10 +455,7 @@ public:
 
         // Calculate the rest of Eq. (6) to get brine density
         auto wH2O = 1.0 - sumSalinity;
-        Evaluation rho = 1.0 / (wH2O / rhow + sumAppVolTimesMf);
-
-        return rho;
-#endif
+        return 1.0 / (wH2O / rhow + sumAppVolTimesMf);
     }
 
     /*!
@@ -572,15 +582,26 @@ public:
         assert(false && "liquidViscosityLaliberte is not supported on the GPU");
         return muW * 1e-3;
 #else
-        // Generate (valid) electrolytes from salt components
-        auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidViscosityLaliberte(temperature, electrolytes, muW);
+#endif
+    }
 
-        // Sum of electrolyte mass fractions
-        // OBS: If there are residual salt molalities when generating electrolytes, sumSalinity
-        // will not be equal to salinity.sum(); see SaltElectrolytes::fromSaltComponents()
-        Evaluation sumSalinity = std::accumulate(
-            electrolytes.begin(), electrolytes.end(), Evaluation(0.0),
-            [](const Evaluation& acc, const auto& salt) { return acc + salt.second; });
+    /*!
+     * Viscosity of liquid brine from Laliberte (2007), eq 8, for given electrolytes
+     *
+     * @param temperature Temperature [K]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @param muW Viscosity of pure water [mPa*s]
+     * @return Viscosity of brine [Pa*s]
+     */
+    template <class Evaluation>
+    static Evaluation liquidViscosityLaliberte(const Evaluation& temperature,
+                                               const ElectrolyteList<Evaluation>& electrolytes,
+                                               const Evaluation& muW)
+    {
+        // Unpaired ions are not in the list, so this can be below the ion total
+        const Evaluation sumSalinity = soluteMassFraction_(electrolytes);
 
         // ln-viscosity of mix from Eq. (8)
         Evaluation tempC = temperature - 273.15;
@@ -607,7 +628,46 @@ public:
 
         // OBS: mPa*s to Pa*s
         return exp(lnMuMix) * 1e-3;
-#endif
+    }
+
+    /*!
+     * Laliberte (2007) viscosity with pressure taken through pure water: the value with the
+     * Laliberte water viscosity, times the IAPWS water viscosity at the pressure over that
+     * at p0, the larger of 0.1 MPa and the vapour pressure.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Viscosity of brine [Pa*s]
+     */
+    template <class Evaluation>
+    static Evaluation liquidViscosityLaliberte(const Evaluation& temperature,
+                                               const Evaluation& pressure,
+                                               const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const Evaluation muW = liquidViscosityPureWaterLaliberte_(temperature);
+        const Evaluation mu = electrolytes.empty()
+            ? muW * 1e-3
+            : liquidViscosityLaliberte(temperature, electrolytes, muW);
+
+        Evaluation p0 = H2O::vaporPressure(temperature);
+        if (p0 < 1e5) {
+            p0 = 1e5;
+        }
+        return mu * H2O::liquidViscosity(temperature, pressure, /*extrapolate=*/true)
+            / H2O::liquidViscosity(temperature, p0, /*extrapolate=*/true);
+    }
+
+    /*!
+     * Density of pure water from Laliberte and Cooper (2004), eq 12
+     *
+     * @param temperature Temperature [K]
+     * @return Density [kg/m3]
+     */
+    template <class Evaluation>
+    static Evaluation liquidDensityPureWaterLaliberteCooper(const Evaluation& temperature)
+    {
+        return liquidDensityPureWaterLaliberteCooper_(temperature);
     }
 
     /*!
@@ -651,6 +711,24 @@ public:
     }
 
     /*!
+     * Heat capacity of brine from Laliberte (2009) for given electrolytes, with water at
+     * pressure
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation liquidHeatCapacityLaliberte(const Evaluation& temperature,
+                                                  const Evaluation& pressure,
+                                                  const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const Evaluation cpW = H2O::liquidHeatCapacity(temperature, pressure);
+        return heatCapacityLaliberte_(temperature, electrolytes, cpW);
+    }
+
+    /*!
      * Enthalpy of brine: water enthalpy from H2O at the given temperature and pressure, plus
      * the Laliberte (2009) solute heat capacities integrated from 0 C. Heat of mixing at 0 C
      * is neglected. The temperature derivative is the Laliberte heat capacity with water at
@@ -670,6 +748,22 @@ public:
                             PairingMethod pairing = PairingMethod::Proportional)
     {
         const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidEnthalpyLaliberte(temperature, pressure, electrolytes);
+    }
+
+    /*!
+     * Enthalpy of brine from Laliberte (2009) for given electrolytes
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation liquidEnthalpyLaliberte(const Evaluation& temperature,
+                                              const Evaluation& pressure,
+                                              const ElectrolyteList<Evaluation>& electrolytes)
+    {
         const Evaluation hW = H2O::liquidEnthalpy(temperature, pressure);
         return enthalpyLaliberte_(temperature, electrolytes, hW);
     }
@@ -691,8 +785,8 @@ public:
                                              const Evaluation& massFracNaCl)
     {
         const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
-        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
-        return H2O::liquidEnthalpy(scaledTempC + 273.15, pressure);
+        const Evaluation scaledTemp = q1 + q2 * (temperature - 273.15) + 273.15;
+        return H2O::liquidEnthalpy(scaledTemp, pressure);
     }
 
     /*!
@@ -710,8 +804,8 @@ public:
                                                  const Evaluation& massFracNaCl)
     {
         const auto [q1, q2] = driesnerScaling_(pressure, massFracNaCl);
-        const Evaluation scaledTempC = q1 + q2 * (temperature - 273.15);
-        return q2 * H2O::liquidHeatCapacity(scaledTempC + 273.15, pressure);
+        const Evaluation scaledTemp = q1 + q2 * (temperature - 273.15) + 273.15;
+        return q2 * H2O::liquidHeatCapacity(scaledTemp, pressure);
     }
 
     /*!
@@ -733,7 +827,26 @@ public:
                                         const SaltArray<Evaluation, SaltMassFraction>& salinity,
                                         PairingMethod pairing = PairingMethod::Proportional)
     {
-        const LaliberteDriesner_<Evaluation> model(pressure, salinity, pairing);
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidHeatCapacityLaliberteDriesner(temperature, pressure, electrolytes);
+    }
+
+    /*!
+     * Heat capacity of a multicomponent brine over the full temperature range, for given
+     * electrolytes; see the salinity version
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Heat capacity of brine [J/(kg K)]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidHeatCapacityLaliberteDriesner(const Evaluation& temperature,
+                                        const Evaluation& pressure,
+                                        const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const LaliberteDriesner_<Evaluation> model(pressure, electrolytes);
         return model.heatCapacity(temperature);
     }
 
@@ -756,7 +869,26 @@ public:
                                     const SaltArray<Evaluation, SaltMassFraction>& salinity,
                                     PairingMethod pairing = PairingMethod::Proportional)
     {
-        const LaliberteDriesner_<Evaluation> model(pressure, salinity, pairing);
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidEnthalpyLaliberteDriesner(temperature, pressure, electrolytes);
+    }
+
+    /*!
+     * Enthalpy of a multicomponent brine over the full temperature range, for given
+     * electrolytes; see the salinity version
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Enthalpy of brine [J/kg]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidEnthalpyLaliberteDriesner(const Evaluation& temperature,
+                                    const Evaluation& pressure,
+                                    const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const LaliberteDriesner_<Evaluation> model(pressure, electrolytes);
         return model.enthalpy(temperature);
     }
 
@@ -778,9 +910,25 @@ public:
                                            const SaltArray<Evaluation, SaltMassFraction>& salinity,
                                            PairingMethod pairing = PairingMethod::Proportional)
     {
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidDensityMaoDuan(temperature, pressure, electrolytes);
+    }
+
+    /*!
+     * Density of a basin brine for given electrolytes; see the salinity version
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Brine density [kg/m3]
+     */
+    template <class Evaluation>
+    static Evaluation liquidDensityMaoDuan(const Evaluation& temperature,
+                                           const Evaluation& pressure,
+                                           const ElectrolyteList<Evaluation>& electrolytes)
+    {
         using MaoDuan = MaoDuanBrine<Scalar>;
         using Electrolytes = SaltElectrolytes<Scalar>;
-        const auto electrolytes = Electrolytes::fromSaltComponents(salinity, pairing);
         const Evaluation sumW = soluteMassFraction_(electrolytes);
         const Evaluation rhoW = MaoDuan::waterDensity(temperature, pressure);
 
@@ -830,8 +978,24 @@ public:
                            const SaltArray<Evaluation, SaltMassFraction>& salinity,
                            PairingMethod pairing = PairingMethod::Proportional)
     {
-        using MaoDuan = MaoDuanBrine<Scalar>;
         const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        return liquidViscosityMaoDuan(temperature, pressure, electrolytes);
+    }
+
+    /*!
+     * Viscosity of a basin brine for given electrolytes; see the salinity version
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Viscosity of brine [Pa s]
+     */
+    template <class Evaluation>
+    static Evaluation liquidViscosityMaoDuan(const Evaluation& temperature,
+                                             const Evaluation& pressure,
+                                             const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        using MaoDuan = MaoDuanBrine<Scalar>;
         const Evaluation sumW = soluteMassFraction_(electrolytes);
         const Evaluation muW = MaoDuan::waterViscosity(temperature, pressure);
 
@@ -860,12 +1024,10 @@ public:
     }
 
 private:
-    using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
 
     template <class Evaluation>
-    static Evaluation soluteMassFraction_(
-        const typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>& electrolytes)
+    static Evaluation soluteMassFraction_(const ElectrolyteList<Evaluation>& electrolytes)
     {
         Evaluation sum = 0.0;
         for (const auto& salt : electrolytes) {
@@ -873,10 +1035,6 @@ private:
         }
         return sum;
     }
-
-    template <class Evaluation>
-    using ElectrolyteList_ =
-        typename SaltElectrolytes<Scalar>::template ElectrolyteList<Evaluation>;
 
     // Molality from the mass fraction of one electrolyte and the total solute mass fraction
     template <class Evaluation>
@@ -937,7 +1095,7 @@ private:
     // Laliberte (2009) eq 10. Boric acid has no heat capacity set, so it counts as water.
     template <class Evaluation>
     static Evaluation heatCapacityLaliberte_(const Evaluation& temperature,
-                                             const ElectrolyteList_<Evaluation>& electrolytes,
+                                             const ElectrolyteList<Evaluation>& electrolytes,
                                              const Evaluation& cpW)
     {
         using HeatCapacity = LaliberteHeatCapacity<Scalar>;
@@ -955,7 +1113,7 @@ private:
     // Water enthalpy plus the solute heat capacities integrated from 0 C
     template <class Evaluation>
     static Evaluation enthalpyLaliberte_(const Evaluation& temperature,
-                                         const ElectrolyteList_<Evaluation>& electrolytes,
+                                         const ElectrolyteList<Evaluation>& electrolytes,
                                          const Evaluation& hW)
     {
         using HeatCapacity = LaliberteHeatCapacity<Scalar>;
@@ -983,12 +1141,11 @@ private:
     {
     public:
         LaliberteDriesner_(const Evaluation& pressure,
-                           const SaltArray<Evaluation, SaltMassFraction>& salinity,
-                           PairingMethod pairing)
+                           const ElectrolyteList<Evaluation>& electrolytes)
             : pressure_(pressure)
-            , electrolytes_(SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing))
+            , electrolytes_(electrolytes)
         {
-            ElectrolyteList_<Evaluation> nacl;
+            ElectrolyteList<Evaluation> nacl;
             for (const auto& salt : electrolytes_) {
                 if (salt.first != Electrolyte::BOH3) {
                     saltMassFraction_ += salt.second;
@@ -1076,7 +1233,7 @@ private:
         }
 
         Evaluation pressure_;
-        ElectrolyteList_<Evaluation> electrolytes_;
+        ElectrolyteList<Evaluation> electrolytes_;
         Evaluation saltMassFraction_ {0.0};
         Evaluation ratio_ {1.0};
     };

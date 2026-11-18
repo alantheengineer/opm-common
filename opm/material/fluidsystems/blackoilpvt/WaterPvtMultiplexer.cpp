@@ -61,6 +61,10 @@ releaseRealPvt_()
         delete &getRealPvt<WaterPvtApproach::BrineH2>();
         break;
     }
+    case WaterPvtApproach::BrineMulticomp: {
+        delete &getRealPvt<WaterPvtApproach::BrineMulticomp>();
+        break;
+    }
     case WaterPvtApproach::NoWater:
         break;
     }
@@ -81,6 +85,9 @@ initFromState(const EclipseState& eclState, const Schedule& schedule)
         setApproach(WaterPvtApproach::BrineCo2);
     else if (eclState.runspec().h2Storage() || eclState.runspec().h2Sol())
         setApproach(WaterPvtApproach::BrineH2);
+    // Before thermal water: the brine models cover temperature and enthalpy
+    else if (eclState.runspec().multiCompSalt().enabled())
+        setApproach(WaterPvtApproach::BrineMulticomp);
     else if (enableThermal && (eclState.getSimulationConfig().isTemp() || eclState.getSimulationConfig().isThermal()))
         setApproach(WaterPvtApproach::ThermalWater);
     else if (!eclState.getTableManager().getPvtwTable().empty())
@@ -89,6 +96,12 @@ initFromState(const EclipseState& eclState, const Schedule& schedule)
         setApproach(WaterPvtApproach::ConstantCompressibilityBrine);
 
     OPM_WATER_PVT_MULTIPLEXER_CALL(pvtImpl.initFromState(eclState, schedule), break);
+
+    // Without brine in the model the salt concentration is not passed in
+    if (approach_ == WaterPvtApproach::BrineMulticomp) {
+        getRealPvt<WaterPvtApproach::BrineMulticomp>().setEnableSaltConcentration(
+            enableBrine && eclState.runspec().phases().active(Phase::BRINE));
+    }
 }
 
 template<class Scalar, bool enableThermal, bool enableBrine>
@@ -153,6 +166,10 @@ setApproach(WaterPvtApproach appr)
         newPvt = new BrineH2Pvt<Scalar>;
         break;
 
+    case WaterPvtApproach::BrineMulticomp:
+        newPvt = new BrineMulticompPvt<Scalar>;
+        break;
+
     case WaterPvtApproach::NoWater:
         throw std::logic_error("Not implemented: Water PVT of this deck!");
     }
@@ -188,6 +205,10 @@ operator=(const WaterPvtMultiplexer<Scalar,enableThermal,enableBrine>& data)
         break;
     case WaterPvtApproach::BrineH2:
         newPvt = new BrineH2Pvt<Scalar>(*static_cast<const BrineH2Pvt<Scalar>*>(data.realWaterPvt_));
+        break;
+    case WaterPvtApproach::BrineMulticomp:
+        newPvt = new BrineMulticompPvt<Scalar>(
+            *static_cast<const BrineMulticompPvt<Scalar>*>(data.realWaterPvt_));
         break;
     case WaterPvtApproach::NoWater:
         break;

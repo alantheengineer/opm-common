@@ -29,10 +29,12 @@
 
 #include <opm/material/fluidsystems/blackoilpvt/BrineCo2Pvt.hpp>
 #include <opm/material/fluidsystems/blackoilpvt/BrineH2Pvt.hpp>
-#include <opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityWaterPvt.hpp>
+#include <opm/material/fluidsystems/blackoilpvt/BrineMulticompPvt.hpp>
 #include <opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityBrinePvt.hpp>
+#include <opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityWaterPvt.hpp>
 #include <opm/material/fluidsystems/blackoilpvt/WaterPvtThermal.hpp>
 
+// clang-format off
 #define OPM_WATER_PVT_MULTIPLEXER_CALL(codeToCall, ...)                                \
     switch (approach_) {                                                               \
     case WaterPvtApproach::ConstantCompressibilityWater: {                             \
@@ -60,10 +62,16 @@
         codeToCall;                                                                    \
         __VA_ARGS__;                                                                   \
     }                                                                                  \
+    case WaterPvtApproach::BrineMulticomp: {                                           \
+        auto& pvtImpl = getRealPvt<WaterPvtApproach::BrineMulticomp>();                \
+        codeToCall;                                                                    \
+        __VA_ARGS__;                                                                   \
+    }                                                                                  \
     default:                                                                           \
     case WaterPvtApproach::NoWater:                                                    \
         throw std::logic_error("Not implemented: Water PVT of this deck!");            \
     }
+// clang-format on
 
 namespace Opm {
 
@@ -73,7 +81,8 @@ enum class WaterPvtApproach {
     ConstantCompressibilityWater,
     ThermalWater,
     BrineCo2,
-    BrineH2
+    BrineH2,
+    BrineMulticomp
 };
 
 class EclipseState;
@@ -324,6 +333,24 @@ public:
     {
         assert(approach() == approachV);
         return *static_cast<const BrineH2Pvt<Scalar>* >(realWaterPvt_);
+    }
+
+    template <WaterPvtApproach approachV>
+    typename std::enable_if<approachV == WaterPvtApproach::BrineMulticomp,
+                            BrineMulticompPvt<Scalar>>::type&
+    getRealPvt()
+    {
+        assert(approach() == approachV);
+        return *static_cast<BrineMulticompPvt<Scalar>*>(realWaterPvt_);
+    }
+
+    template <WaterPvtApproach approachV>
+    typename std::enable_if<approachV == WaterPvtApproach::BrineMulticomp,
+                            const BrineMulticompPvt<Scalar>>::type&
+    getRealPvt() const
+    {
+        assert(approach() == approachV);
+        return *static_cast<const BrineMulticompPvt<Scalar>*>(realWaterPvt_);
     }
 
     const void* realWaterPvt() const { return realWaterPvt_; }

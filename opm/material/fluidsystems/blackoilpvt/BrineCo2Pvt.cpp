@@ -65,12 +65,8 @@ BrineCo2Pvt(const SaltContainerT& salinity,
     for (int i = 0; i < num_regions; ++i) {
         co2ReferenceDensity_[i] = CO2::gasDensity(co2Tables_, T_ref, P_ref, true);
         if (enableMultiCompSalt_) {
-            brineReferenceDensity_[i] =
-                Brine::liquidDensityMulticompSalt(T_ref,
-                                                  P_ref,
-                                                  salinity_[i],
-                                                  useH2ODensity_,
-                                                  extrapolate);
+            brineReferenceDensity_[i] = Brine::liquidDensityMulticompSalt(
+                T_ref, P_ref, salinity_[i], useH2ODensity_, extrapolate, legacyPairing);
         } else {
             brineReferenceDensity_[i] =
                 Brine::liquidDensity(T_ref, P_ref, salinity_[i].sum(), true);
@@ -142,8 +138,8 @@ initFromState(const EclipseState& eclState, const Schedule&)
                 rho_pure * pow(10.0,
                                nacl_exponent * salinity_[regionIdx].sum());
         } else if (enableMultiCompSalt_) {
-            brineReferenceDensity_[regionIdx] =
-                Brine::liquidDensityMulticompSalt(T_ref, P_ref, salinity_[regionIdx], useH2ODensity_, extrapolate);
+            brineReferenceDensity_[regionIdx] = Brine::liquidDensityMulticompSalt(
+                T_ref, P_ref, salinity_[regionIdx], useH2ODensity_, extrapolate, legacyPairing);
         } else {
             brineReferenceDensity_[regionIdx] =
                 Brine::liquidDensity(T_ref,
