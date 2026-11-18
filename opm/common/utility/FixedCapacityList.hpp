@@ -19,6 +19,7 @@
 #ifndef OPM_FIXED_CAPACITY_LIST_HPP
 #define OPM_FIXED_CAPACITY_LIST_HPP
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <stdexcept>
@@ -87,6 +88,12 @@ public:
     [[nodiscard]] auto end() const noexcept
     {
         return data_.begin() + static_cast<std::ptrdiff_t>(size_);
+    }
+
+    /// Equal when the stored elements are equal; unused slots are ignored
+    bool operator==(const FixedCapacityList& other) const
+    {
+        return size_ == other.size_ && std::equal(begin(), end(), other.begin());
     }
 
 private:
