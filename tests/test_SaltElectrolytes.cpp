@@ -30,6 +30,7 @@
 #include <opm/material/densead/Evaluation.hpp>
 #include <opm/material/densead/Math.hpp>
 
+#include <type_traits>
 #include <vector>
 
 #define BOOST_TEST_MODULE SaltElectrolytesTests
@@ -148,9 +149,10 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(SingleElectrolyteTests, Eval, EvalTypes)
     }
 }
 
-BOOST_AUTO_TEST_CASE_TEMPLATE(MultipleElectrolytesOrderingTests, Eval, EvalTypes)
+BOOST_AUTO_TEST_CASE_TEMPLATE(GreedyMultipleElectrolytesOrderingTests, Eval, EvalTypes)
 {
     using Scalar = typename MathToolbox<Eval>::Scalar;
+    constexpr auto greedy = SaltElectrolytes<Scalar>::PairingMethod::Greedy;
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
 
     // Mg2+ pairs fully with SO4^2- into MgSO4, and K+ pairs fully with Cl- into KCl: two
@@ -162,7 +164,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(MultipleElectrolytesOrderingTests, Eval, EvalTypes
     molal[SaltIndex::CL] = 2.0;
     SaltArray<Eval, SaltMassFraction> salinity = molal.template convert_to<SaltMassFraction>();
 
-    auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, greedy);
     BOOST_REQUIRE_EQUAL(electrolytes.size(), 2U);
 
     // Electrolytes are generated anion-first in decreasing ion strength: SO4 (and its
@@ -214,9 +216,10 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(PartialRemainderIsIgnoredTests, Eval, EvalTypes)
     BOOST_CHECK(electrolytes[0].second < salinity.sum());
 }
 
-BOOST_AUTO_TEST_CASE_TEMPLATE(IncompatiblePairIsSkippedAndRetriedTests, Eval, EvalTypes)
+BOOST_AUTO_TEST_CASE_TEMPLATE(GreedyIncompatiblePairIsSkippedAndRetriedTests, Eval, EvalTypes)
 {
     using Scalar = typename MathToolbox<Eval>::Scalar;
+    constexpr auto greedy = SaltElectrolytes<Scalar>::PairingMethod::Greedy;
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
 
     // CaCl2 + K2SO4 mixture: since CaSO4 has not been implemented (yet) but Ca++ and SO4-- are
@@ -229,7 +232,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(IncompatiblePairIsSkippedAndRetriedTests, Eval, Ev
     molal[SaltIndex::SO4] = 1.0;
     SaltArray<Eval, SaltMassFraction> salinity = molal.template convert_to<SaltMassFraction>();
 
-    auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, greedy);
     BOOST_REQUIRE_EQUAL(electrolytes.size(), 2U);
     BOOST_CHECK(electrolytes[0].first == Electrolyte::K2SO4);
     BOOST_CHECK(electrolytes[1].first == Electrolyte::CaCl2);
@@ -241,9 +244,10 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(IncompatiblePairIsSkippedAndRetriedTests, Eval, Ev
                        static_cast<Scalar>(1.0e-4));
 }
 
-BOOST_AUTO_TEST_CASE_TEMPLATE(BasinBrineTests, Eval, EvalTypes)
+BOOST_AUTO_TEST_CASE_TEMPLATE(GreedyBasinBrineTests, Eval, EvalTypes)
 {
     using Scalar = typename MathToolbox<Eval>::Scalar;
+    constexpr auto greedy = SaltElectrolytes<Scalar>::PairingMethod::Greedy;
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
 
     // A charge-balanced Na-Ca-Cl brine with every ion [mol/kg water]. Anions pair in order
@@ -263,7 +267,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BasinBrineTests, Eval, EvalTypes)
     molal[SaltIndex::B] = 0.01;
     const auto salinity = molal.template convert_to<SaltMassFraction>();
 
-    const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, greedy);
     // clang-format off
     const std::vector<Electrolyte> expected = {
         Electrolyte::MgSO4, Electrolyte::Na2CO3, Electrolyte::CaCl2, Electrolyte::MgCl2,
@@ -277,6 +281,135 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BasinBrineTests, Eval, EvalTypes)
 
     // Cl runs out before Li, which has no Br or HCO3 pairing. Boron needs no partner. Left
     // unpaired: 0.03 Li, 0.025 Br and 0.005 HCO3.
-    const auto unpaired = SaltElectrolytes<Scalar>::unpairedMolality(salinity);
+    const auto unpaired = SaltElectrolytes<Scalar>::unpairedMolality(salinity, greedy);
     BOOST_CHECK_CLOSE(scalarValue(unpaired), static_cast<Scalar>(0.06), static_cast<Scalar>(0.1));
+}
+
+// Molality of one electrolyte in a list of electrolyte mass fractions
+template <class Scalar, class List, class Electrolyte>
+Scalar
+molalityOf(const List& electrolytes, const Electrolyte which)
+{
+    Scalar sumW = 0.0;
+    for (const auto& e : electrolytes) {
+        sumW += scalarValue(e.second);
+    }
+    for (const auto& e : electrolytes) {
+        if (e.first == which) {
+            return scalarValue(e.second) / SaltElectrolytes<Scalar>::molarMass(which) / (1 - sumW);
+        }
+    }
+    return 0.0;
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(ProportionalPairingTests, Eval, EvalTypes)
+{
+    using Scalar = typename MathToolbox<Eval>::Scalar;
+    using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
+
+    // Equal charge on Mg and K, and on SO4 and Cl: each pair takes a quarter of the 4
+    // equivalents [mol/kg water]
+    SaltArray<Eval, SaltMolality> molal;
+    molal[SaltIndex::MG] = 1.0;
+    molal[SaltIndex::SO4] = 1.0;
+    molal[SaltIndex::K] = 2.0;
+    molal[SaltIndex::CL] = 2.0;
+    const auto salinity = molal.template convert_to<SaltMassFraction>();
+    const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    BOOST_REQUIRE_EQUAL(electrolytes.size(), 4U);
+    const auto molalOf = [&](Electrolyte e) { return molalityOf<Scalar>(electrolytes, e); };
+    const Scalar tol = 1e-3;
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::MgSO4), Scalar(0.5), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::MgCl2), Scalar(0.5), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::K2SO4), Scalar(0.5), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::KCl), Scalar(1.0), tol);
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(ProportionalPairingRefitsMissingPairsTests, Eval, EvalTypes)
+{
+    using Scalar = typename MathToolbox<Eval>::Scalar;
+    using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
+
+    // The NaCl, MgSO4 and NaBr mixture of Lilek and Zuend (2022), supplement S1. There is
+    // no MgBr2, so Br must all go to Na and the other pairs make room for it.
+    SaltArray<Eval, SaltMolality> molal;
+    molal[SaltIndex::NA] = 5.0;
+    molal[SaltIndex::CL] = 2.0;
+    molal[SaltIndex::MG] = 9.0;
+    molal[SaltIndex::SO4] = 9.0;
+    molal[SaltIndex::BR] = 3.0;
+    const auto salinity = molal.template convert_to<SaltMassFraction>();
+
+    const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    BOOST_CHECK_EQUAL(electrolytes.size(), 5U);
+
+    // Na keeps 2 equivalents for SO4 and Cl, split 9 to 1 as for Mg. The fit stops near
+    // machine precision, so float gets a wider tolerance [%].
+    const auto molalOf = [&](Electrolyte e) { return molalityOf<Scalar>(electrolytes, e); };
+    const Scalar tol = std::is_same_v<Scalar, float> ? 1e-2 : 1e-4;
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::NaBr), Scalar(3.0), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::NaCl), Scalar(0.2), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::Na2SO4), Scalar(0.9), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::MgSO4), Scalar(8.1), tol);
+    BOOST_CHECK_CLOSE(molalOf(Electrolyte::MgCl2), Scalar(0.9), tol);
+
+    const auto unpaired = SaltElectrolytes<Scalar>::unpairedMolality(salinity);
+    BOOST_CHECK_SMALL(scalarValue(unpaired), Scalar(1e-4));
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(ProportionalBasinBrineTests, Eval, EvalTypes)
+{
+    using Scalar = typename MathToolbox<Eval>::Scalar;
+
+    // The charge-balanced brine of the greedy test. Every ion has a supported partner, so
+    // proportional pairing uses all of them, Li and Br included.
+    SaltArray<Eval, SaltMolality> molal;
+    molal[SaltIndex::NA] = 3.0;
+    molal[SaltIndex::K] = 0.1;
+    molal[SaltIndex::LI] = 0.03;
+    molal[SaltIndex::CA] = 0.8;
+    molal[SaltIndex::MG] = 0.1;
+    molal[SaltIndex::SR] = 0.02;
+    molal[SaltIndex::SO4] = 0.01;
+    molal[SaltIndex::CO3] = 0.001;
+    molal[SaltIndex::CL] = 4.913;
+    molal[SaltIndex::BR] = 0.03;
+    molal[SaltIndex::HCO3] = 0.005;
+    molal[SaltIndex::B] = 0.01;
+    const auto salinity = molal.template convert_to<SaltMassFraction>();
+
+    const auto unpaired = SaltElectrolytes<Scalar>::unpairedMolality(salinity);
+    BOOST_CHECK_SMALL(scalarValue(unpaired), Scalar(1e-4));
+
+    // Paired mass makes up all the dissolved mass
+    const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    Scalar sumW = 0.0;
+    for (const auto& e : electrolytes) {
+        sumW += scalarValue(e.second);
+    }
+    BOOST_CHECK_CLOSE(sumW, scalarValue(salinity.sum()), Scalar(1e-3));
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(ProportionalUnbalancedTests, Eval, EvalTypes)
+{
+    using Scalar = typename MathToolbox<Eval>::Scalar;
+    using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
+
+    // 3 Na against 1 Cl: 1 NaCl, 2 Na unpaired. Ca and SO4 alone have no supported pair.
+    SaltArray<Eval, SaltMolality> molal;
+    molal[SaltIndex::NA] = 3.0;
+    molal[SaltIndex::CL] = 1.0;
+    auto salinity = molal.template convert_to<SaltMassFraction>();
+    auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity);
+    BOOST_REQUIRE_EQUAL(electrolytes.size(), 1U);
+    BOOST_CHECK(electrolytes[0].first == Electrolyte::NaCl);
+    BOOST_CHECK_CLOSE(scalarValue(SaltElectrolytes<Scalar>::unpairedMolality(salinity)),
+                      Scalar(2.0),
+                      Scalar(1e-3));
+
+    SaltArray<Eval, SaltMolality> gypsum;
+    gypsum[SaltIndex::CA] = 0.01;
+    gypsum[SaltIndex::SO4] = 0.01;
+    salinity = gypsum.template convert_to<SaltMassFraction>();
+    BOOST_CHECK(SaltElectrolytes<Scalar>::fromSaltComponents(salinity).empty());
 }

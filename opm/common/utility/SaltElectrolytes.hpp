@@ -25,8 +25,11 @@
 
 #include <opm/material/common/MathToolbox.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -56,6 +59,12 @@ public:
     // clang-format on
 
     static constexpr std::size_t numElectrolytes = static_cast<std::size_t>(Electrolyte::NUM);
+
+    /// How ions are paired into electrolytes
+    enum class PairingMethod {
+        Proportional, ///< every cation with every anion, by share of charge
+        Greedy ///< anions in turn take cations in a fixed order; the original method
+    };
 
     /// Electrolytes and their mass fractions, held without heap allocation. Each
     /// cation-anion pair is visited once, so no electrolyte appears twice.
@@ -129,14 +138,16 @@ public:
      * Generate electrolytes from salt ions
      *
      * @param salinity Array of salt ions
+     * @param method How ions are paired
      * @return Electrolytes and their mass fractions
      */
     template <class Evaluation>
     static ElectrolyteList<Evaluation>
-    fromSaltComponents(const SaltArray<Evaluation, SaltMassFraction>& salinity)
+    fromSaltComponents(const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                       const PairingMethod method = PairingMethod::Proportional)
     {
         auto molality = salinity.template convert_to<SaltMolality>();
-        auto electrolytes = fromIonMolality_(molality);
+        auto electrolytes = fromIonMolality_(molality, method);
 
         // Convert salt electrolytes from molality to mass fraction
         molalToMassFrac_(electrolytes);
@@ -149,28 +160,61 @@ public:
      * the brine properties, so input checks warn when this is above zero.
      *
      * @param salinity Array of salt ions
+     * @param method How ions are paired
      * @return Sum of unpaired ion molalities [mol/kg water]
      */
     template <class Evaluation>
-    static Evaluation unpairedMolality(const SaltArray<Evaluation, SaltMassFraction>& salinity)
+    static Evaluation unpairedMolality(const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                                       const PairingMethod method = PairingMethod::Proportional)
     {
         auto molality = salinity.template convert_to<SaltMolality>();
-        fromIonMolality_(molality);
+        fromIonMolality_(molality, method);
         return molality.sum();
     }
 
     static constexpr Scalar molalTolerance = 1e-6; ///< tolerance for molality calculations
 
 private:
+    static constexpr std::size_t numCations_ = numSaltCations;
+    static constexpr std::size_t numAnions_ = numSaltAnions;
+    static constexpr int maxFitIterations_ = 200;
+    static constexpr Scalar fitTolerance_ = 100 * std::numeric_limits<Scalar>::epsilon();
+
     /*!
      * Generate electrolytes (in molality) from salt ion molalities
+     *
+     * @param molalSalinity Molality of each salt ion; left holding the unpaired molalities
+     * @param method How ions are paired
+     * @return Electrolytes and their molality [mol electrolyte/kg water]
+     */
+    template <class Evaluation>
+    static ElectrolyteList<Evaluation>
+    fromIonMolality_(SaltArray<Evaluation, SaltMolality>& molalSalinity, const PairingMethod method)
+    {
+        auto electrolytes = method == PairingMethod::Greedy ? pairGreedy_(molalSalinity)
+                                                            : pairProportional_(molalSalinity);
+
+        // Neutral solutes need no partner
+        for (const auto& p : pairings) {
+            auto& molal = molalSalinity[p.cation];
+            if (isNeutral(p) && molal >= molalTolerance) {
+                electrolytes.push_back({p.electrolyte, molal});
+                molal = 0.0;
+            }
+        }
+
+        return electrolytes;
+    }
+
+    /*!
+     * Pair ions anion by anion, strongest charge first, each taking cations in a fixed order
      *
      * @param molalSalinity Molality of each salt ion; left holding the unpaired molalities
      * @return Electrolytes and their molality [mol electrolyte/kg water]
      */
     template <class Evaluation>
     static ElectrolyteList<Evaluation>
-    fromIonMolality_(SaltArray<Evaluation, SaltMolality>& molalSalinity)
+    pairGreedy_(SaltArray<Evaluation, SaltMolality>& molalSalinity)
     {
         // Generate (valid) electrolytes from salt components
         const auto [cations, anions] = molalSalinity.cations_and_anions();
@@ -198,16 +242,171 @@ private:
             }
         }
 
-        // Neutral solutes need no partner
-        for (const auto& p : pairings) {
-            auto& molal = molalSalinity[p.cation];
-            if (isNeutral(p) && molal >= molalTolerance) {
-                electrolytes.push_back({p.electrolyte, molal});
-                molal = 0.0;
-            }
+        return electrolytes;
+    }
+
+    /*!
+     * Pair every cation with every anion in proportion to their charge, which is Young's rule
+     * with equivalent fractions (Reilly and Wood, J. Phys. Chem. 73, 1969). Pairs without
+     * Laliberte coefficients are left out, and the others are rescaled by iterative
+     * proportional fitting so that each ion's charge is used once. Charge left over from an
+     * unbalanced brine, or on ions with no supported partner, stays unpaired.
+     *
+     * @param molalSalinity Molality of each salt ion; left holding the unpaired molalities
+     * @return Electrolytes and their molality [mol electrolyte/kg water]
+     */
+    template <class Evaluation>
+    static ElectrolyteList<Evaluation>
+    pairProportional_(SaltArray<Evaluation, SaltMolality>& molalSalinity)
+    {
+        const auto [cations, anions] = molalSalinity.cations_and_anions();
+        const std::size_t nc = cations.size();
+        const std::size_t na = anions.size();
+
+        // Charge equivalents of each ion, and the supported pairs
+        std::array<Evaluation, numCations_> cationEq {};
+        std::array<Evaluation, numAnions_> anionEq {};
+        std::array<std::array<int, numAnions_>, numCations_> pairIdx {};
+        for (std::size_t i = 0; i < nc; ++i) {
+            const auto& m = molalSalinity[cations[i]];
+            const Scalar z = ionStrength(cations[i]);
+            cationEq[i] = m >= molalTolerance ? m * z : Evaluation(0.0);
+        }
+        for (std::size_t j = 0; j < na; ++j) {
+            const auto& m = molalSalinity[anions[j]];
+            const Scalar z = -ionStrength(anions[j]);
+            anionEq[j] = m >= molalTolerance ? m * z : Evaluation(0.0);
         }
 
+        // Ions with no supported partner take no part
+        std::array<bool, numCations_> cationPaired {};
+        std::array<bool, numAnions_> anionPaired {};
+        for (std::size_t i = 0; i < nc; ++i) {
+            for (std::size_t j = 0; j < na; ++j) {
+                const bool present = cationEq[i] > 0.0 && anionEq[j] > 0.0;
+                pairIdx[i][j] = present ? pairingIndex_(cations[i], anions[j]) : -1;
+                if (pairIdx[i][j] >= 0) {
+                    cationPaired[i] = true;
+                    anionPaired[j] = true;
+                }
+            }
+        }
+        Evaluation totalCationEq = 0.0;
+        Evaluation totalAnionEq = 0.0;
+        for (std::size_t i = 0; i < nc; ++i) {
+            if (!cationPaired[i]) {
+                cationEq[i] = 0.0;
+            }
+            totalCationEq += cationEq[i];
+        }
+        for (std::size_t j = 0; j < na; ++j) {
+            if (!anionPaired[j]) {
+                anionEq[j] = 0.0;
+            }
+            totalAnionEq += anionEq[j];
+        }
+
+        ElectrolyteList<Evaluation> electrolytes;
+        if (totalCationEq < molalTolerance || totalAnionEq < molalTolerance) {
+            return electrolytes;
+        }
+
+        // The larger side gives up its excess in proportion
+        const Evaluation total = min(totalCationEq, totalAnionEq);
+        std::array<Evaluation, numCations_> rowTarget {};
+        std::array<Evaluation, numAnions_> colTarget {};
+        for (std::size_t i = 0; i < nc; ++i) {
+            rowTarget[i] = cationEq[i] * (total / totalCationEq);
+        }
+        for (std::size_t j = 0; j < na; ++j) {
+            colTarget[j] = anionEq[j] * (total / totalAnionEq);
+        }
+
+        // Equivalents in each pair, starting from the proportional share
+        std::array<std::array<Evaluation, numAnions_>, numCations_> eq {};
+        for (std::size_t i = 0; i < nc; ++i) {
+            for (std::size_t j = 0; j < na; ++j) {
+                eq[i][j]
+                    = pairIdx[i][j] >= 0 ? rowTarget[i] * colTarget[j] / total : Evaluation(0.0);
+            }
+        }
+        fitToTargets_(eq, rowTarget, colTarget, nc, na);
+
+        for (std::size_t i = 0; i < nc; ++i) {
+            for (std::size_t j = 0; j < na; ++j) {
+                if (pairIdx[i][j] < 0 || eq[i][j] <= 0.0) {
+                    continue;
+                }
+                const auto& p = pairings[static_cast<std::size_t>(pairIdx[i][j])];
+                const Evaluation m = eq[i][j] / (p.cationsPer * ionStrength(p.cation));
+                molalSalinity[p.cation] -= m * p.cationsPer;
+                molalSalinity[p.anion] -= m * p.anionsPer;
+                electrolytes.push_back({p.electrolyte, m});
+            }
+        }
         return electrolytes;
+    }
+
+    /*!
+     * Scale rows and columns in turn until the row and column sums meet their targets. Rows
+     * and columns that are all zero are left alone. If the targets cannot all be met, the
+     * columns are capped at their targets so no ion is used beyond what is present.
+     */
+    template <class Evaluation>
+    static void fitToTargets_(std::array<std::array<Evaluation, numAnions_>, numCations_>& eq,
+                              const std::array<Evaluation, numCations_>& rowTarget,
+                              const std::array<Evaluation, numAnions_>& colTarget,
+                              const std::size_t nc,
+                              const std::size_t na)
+    {
+        const auto scaleColumns = [&](bool capOnly) {
+            for (std::size_t j = 0; j < na; ++j) {
+                Evaluation sum = 0.0;
+                for (std::size_t i = 0; i < nc; ++i) {
+                    sum += eq[i][j];
+                }
+                if (sum > 0.0 && (!capOnly || sum > colTarget[j])) {
+                    const Evaluation f = colTarget[j] / sum;
+                    for (std::size_t i = 0; i < nc; ++i) {
+                        eq[i][j] *= f;
+                    }
+                }
+            }
+        };
+
+        for (int iter = 0; iter < maxFitIterations_; ++iter) {
+            Scalar worst = 0.0;
+            for (std::size_t i = 0; i < nc; ++i) {
+                Evaluation sum = 0.0;
+                for (std::size_t j = 0; j < na; ++j) {
+                    sum += eq[i][j];
+                }
+                if (sum > 0.0) {
+                    const Evaluation f = rowTarget[i] / sum;
+                    worst = std::max(worst, static_cast<Scalar>(std::abs(getValue(f) - 1.0)));
+                    for (std::size_t j = 0; j < na; ++j) {
+                        eq[i][j] *= f;
+                    }
+                }
+            }
+            if (worst < fitTolerance_) {
+                return;
+            }
+            scaleColumns(false);
+        }
+        scaleColumns(true);
+    }
+
+    /// Index into pairings of the electrolyte made of a cation and an anion, or -1
+    static constexpr int pairingIndex_(const SaltIndex cation, const SaltIndex anion)
+    {
+        for (std::size_t k = 0; k < numElectrolytes; ++k) {
+            const auto& p = pairings[k];
+            if (!isNeutral(p) && p.cation == cation && p.anion == anion) {
+                return static_cast<int>(k);
+            }
+        }
+        return -1;
     }
 
     /*!

@@ -1122,6 +1122,9 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, 
     using H2O = Opm::H2O<Scalar>;
     using BrineDyn = Opm::BrineDynamic<Scalar, H2O>;
 
+    // The reference values are for the salts as mixed, which greedy pairing gives back
+    constexpr auto greedy = BrineDyn::PairingMethod::Greedy;
+
     // Read JSON file with reference values
     const std::filesystem::path
         jsonFileVisc("material/ref_data_viscosity_multicomponent_salts.json");
@@ -1179,8 +1182,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, 
             }
 
             // Compare
-            Scalar visc =
-                BrineDyn::liquidViscosityMulticompSalt(T, saltArray).value();
+            Scalar visc = BrineDyn::liquidViscosityMulticompSalt(T, saltArray, greedy).value();
             Scalar visc_ref = Scalar(viscosity.get_array_item(i).as_double());
             const std::string msg =
                 fmt::format(
@@ -1218,8 +1220,9 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, 
             }
 
             // Compare
-            Scalar dens =
-                BrineDyn::liquidDensityMulticompSalt(T, Evaluation(101325.0), saltArray).value();
+            Scalar dens = BrineDyn::liquidDensityMulticompSalt(
+                              T, Evaluation(101325.0), saltArray, false, false, greedy)
+                              .value();
             Scalar dens_ref = Scalar(density.get_array_item(i).as_double());
             const std::string msg =
                 fmt::format(
@@ -1235,10 +1238,13 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineMultiComponentSaltsWithSimpleHuDuanH2OClass, 
 
             // Compare using pure water density from H2O::liquidDensity (extrapolated) instead
             // of the Laliberte & Cooper pure water correlation
-            Scalar densH2O =
-                BrineDyn::liquidDensityMulticompSalt(
-                    T, Evaluation(101325.0), saltArray, /*useH2ODensity=*/true, /*extrapolate=*/true)
-                    .value();
+            Scalar densH2O = BrineDyn::liquidDensityMulticompSalt(T,
+                                                                  Evaluation(101325.0),
+                                                                  saltArray,
+                                                                  /*useH2ODensity=*/true,
+                                                                  /*extrapolate=*/true,
+                                                                  greedy)
+                                 .value();
             const std::string msgH2O =
                 fmt::format(
                     "{}: relative difference between density (H2O rhow) {} and reference {} exceeds "
