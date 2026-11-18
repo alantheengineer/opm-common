@@ -36,9 +36,10 @@ namespace Opm
 {
 
 /*!
- * \brief Apparent molar volume of binary chloride solutions from Mao and Duan, J. Chem.
- * Thermodyn. 40, 2008.
+ * \brief Binary chloride solutions after Mao and Duan: apparent molar volume from J. Chem.
+ * Thermodyn. 40, 2008, and viscosity from Int. J. Thermophys. 30, 2009.
  *
+ * Volume:
  * Pitzer form, eq 2, referenced to the volume at a fixed molality, eqs 8 and 10 to 12, so that
  *     V_phi(m) = V(m_r)/m_r - 1000/(rho_w m_r) + nu |z+ z-| A_V [h(I_m) - h(I_r)]
  *                + 2 nu+ nu- R T [B_V (m - m_r) + nu+ z+ C_V (m^2 - m_r^2)],
@@ -138,8 +139,113 @@ public:
         return vPhi * 1e-6;
     }
 
+    /// Whether a relative viscosity model is given for the electrolyte
+    static constexpr bool coversViscosity(const Electrolyte electrolyte)
+    {
+        return viscosityIndex_(electrolyte).has_value();
+    }
+
+    /*!
+     * Viscosity of water, Mao and Duan (2009), eq 6 and Table 2, with IAPWS-97 density
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @return Viscosity [Pa s]
+     */
+    template <class Evaluation>
+    static Evaluation waterViscosity(const Evaluation& temperature, const Evaluation& pressure)
+    {
+        const Evaluation rho = waterDensity(temperature, pressure) * 1e-3; // g/cm3
+        const Evaluation& T = temperature;
+        const Evaluation lnMu = d_[0] / (T * T) + d_[1] / T + d_[2] + d_[3] * T + d_[4] * T * T
+            + rho * (d_[5] / (T * T) + d_[6] / T + d_[7] + d_[8] * T + d_[9] * T * T);
+        return exp(lnMu);
+    }
+
+    /*!
+     * Logarithm of the relative viscosity of a binary solution. LiCl, NaCl and KCl follow
+     * Mao and Duan (2009), eqs 1 to 5 and Table 3. CaCl2 uses the same form, fitted for this
+     * code to Abdulagatov and Azizov, Fluid Phase Equilib. 240, 2006 (293 to 575 K, 0.1 to
+     * 60 MPa, to 2 mol/kg) and to the data compiled by Laliberte, J. Chem. Eng. Data 54,
+     * 2009 (0 to 55 C, to 6 mol/kg); it reproduces them to 0.6% and 1.6% on average.
+     *
+     * @param electrolyte LiCl, NaCl, KCl or CaCl2
+     * @param temperature Temperature [K]
+     * @param molality Molality of the electrolyte [mol/kg water]
+     * @return ln(viscosity / water viscosity) [-]
+     */
+    template <class Evaluation>
+    static Evaluation lnRelativeViscosity(const Electrolyte electrolyte,
+                                          const Evaluation& temperature,
+                                          const Evaluation& molality)
+    {
+        const auto& v = viscosity_[*viscosityIndex_(electrolyte)];
+        const Evaluation t = temperature / v.tempScale;
+        const Evaluation a = v.a[0] + t * (v.a[1] + t * (v.a[2] + t * v.a[3]));
+        const Evaluation b = v.b[0] + t * (v.b[1] + t * v.b[2]);
+        const Evaluation c = v.c[0] + t * v.c[1];
+        const Evaluation& m = molality;
+        return m * (a + m * (b + m * c));
+    }
+
 private:
     static constexpr Scalar gasConstant_ = 8.314472; // cm3 MPa/(mol K)
+
+    // Mao and Duan (2009), Table 2: ln(mu) = sum d_i T^(i-3) + rho sum d_i T^(i-8)
+    static constexpr std::array<Scalar, 10> d_ = {0.28853170e7,
+                                                  -0.11072577e5,
+                                                  -0.90834095e1,
+                                                  0.30925651e-1,
+                                                  -0.27407100e-4,
+                                                  -0.19283851e7,
+                                                  0.56216046e4,
+                                                  0.13827250e2,
+                                                  -0.47609523e-1,
+                                                  0.35545041e-4};
+
+    // ln(eta_r) = A m + B m^2 + C m^3, with A, B and C polynomials in T / tempScale
+    struct ViscositySet
+    {
+        Electrolyte electrolyte;
+        Scalar tempScale; // K
+        std::array<Scalar, 4> a;
+        std::array<Scalar, 3> b;
+        std::array<Scalar, 2> c;
+    };
+
+    static constexpr std::optional<std::size_t> viscosityIndex_(const Electrolyte electrolyte)
+    {
+        for (std::size_t k = 0; k < viscosity_.size(); ++k) {
+            if (viscosity_[k].electrolyte == electrolyte) {
+                return k;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // clang-format off
+    static constexpr std::array<ViscositySet, 4> viscosity_ = {{
+        // Mao and Duan (2009), Table 3, T in K
+        {Electrolyte::LiCl, 1.0,
+         {0.62204136e-2, 0.54436974e-3, -0.40443190e-6, 0},
+         {0.14987325e-1, -0.66617390e-4, 0.52113332e-7},
+         {0.12101624e-5, 0.17772678e-6}},
+        {Electrolyte::NaCl, 1.0,
+         {-0.21319213, 0.13651589e-2, -0.12191756e-5, 0},
+         {0.69161945e-1, -0.27292263e-3, 0.20852448e-6},
+         {-0.25988855e-2, 0.77989227e-5}},
+        {Electrolyte::KCl, 1.0,
+         {-0.42122934, 0.18286059e-2, -0.13603098e-5, 0},
+         {0.11380205e-1, 0.47541391e-5, -0.99280575e-7},
+         {0, 0}},
+        // Fitted for this code, T / 300 K
+        {Electrolyte::CaCl2, 300.0,
+         {-1.3438892472e+00, 3.0573535084e+00, -1.7606044540e+00, 3.3193259481e-01},
+         {2.4475740832e-01, -3.5265818370e-01, 1.1381394527e-01},
+         {1.2693964694e-03, 0}},
+    }};
+    // clang-format on
+
     static constexpr Scalar b_ = 1.2; // kg^0.5 mol^-0.5
 
     template <class Evaluation>

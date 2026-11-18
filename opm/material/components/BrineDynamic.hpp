@@ -808,6 +808,57 @@ public:
         return mass / volume;
     }
 
+    /*!
+     * Viscosity of a basin brine. Every electrolyte is taken as a binary solution at the
+     * brine's total ionic strength, and the logarithms of their relative viscosities are
+     * weighted by ionic-strength fraction, which reduces to the mixing rule of Mao and Duan,
+     * Int. J. Thermophys. 30, 2009, eq 7, for 1:1 chlorides. LiCl, NaCl, KCl and CaCl2 use
+     * MaoDuanBrine; the others use Laliberte (2007). Water viscosity is Mao and Duan's
+     * equation with IAPWS-97 density, which carries the pressure dependence. Boric acid
+     * counts as water.
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param salinity Array of salt-ion mass fractions in the total brine [kg ion/kg brine]
+     * @param pairing How ions are paired into electrolytes
+     * @return Viscosity of brine [Pa s]
+     */
+    template <class Evaluation>
+    static Evaluation
+    liquidViscosityMaoDuan(const Evaluation& temperature,
+                           const Evaluation& pressure,
+                           const SaltArray<Evaluation, SaltMassFraction>& salinity,
+                           PairingMethod pairing = PairingMethod::Proportional)
+    {
+        using MaoDuan = MaoDuanBrine<Scalar>;
+        const auto electrolytes = SaltElectrolytes<Scalar>::fromSaltComponents(salinity, pairing);
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        const Evaluation muW = MaoDuan::waterViscosity(temperature, pressure);
+
+        Evaluation ionicStrength = 0.0;
+        for (const auto& salt : electrolytes) {
+            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+        }
+        if (ionicStrength <= 0.0) {
+            return muW;
+        }
+
+        Evaluation lnRelative = 0.0;
+        for (const auto& salt : electrolytes) {
+            const Scalar ionic = ionicStrengthPerMole_(salt.first);
+            if (ionic == 0.0) {
+                continue;
+            }
+            const Evaluation fraction = molalityOf_(salt, sumW) * ionic / ionicStrength;
+            const Evaluation mBinary = ionicStrength / ionic;
+            const Evaluation lnBinary = MaoDuan::coversViscosity(salt.first)
+                ? MaoDuan::lnRelativeViscosity(salt.first, temperature, mBinary)
+                : lnRelativeViscosityLaliberte_(salt.first, temperature, mBinary);
+            lnRelative += fraction * lnBinary;
+        }
+        return muW * exp(lnRelative);
+    }
+
 private:
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
     static constexpr std::size_t numElectrolytes = SaltElectrolytes<Scalar>::numElectrolytes;
@@ -845,6 +896,21 @@ private:
         const Scalar zc = ionStrength(p.cation);
         const Scalar za = ionStrength(p.anion);
         return 0.5 * (p.cationsPer * zc * zc + p.anionsPer * za * za);
+    }
+
+    // ln(viscosity / water viscosity) of a binary solution from Laliberte (2007), eqs 8 and 12
+    template <class Evaluation>
+    static Evaluation lnRelativeViscosityLaliberte_(const Electrolyte electrolyte,
+                                                    const Evaluation& temperature,
+                                                    const Evaluation& molality)
+    {
+        const Scalar mm = SaltElectrolytes<Scalar>::molarMass(electrolyte);
+        const Evaluation w = molality * mm / (1.0 + molality * mm);
+        const Evaluation tempC = temperature - 273.15;
+        const auto v = viscosityCoefficients(electrolyte);
+        const Evaluation lnMuSolute
+            = (v[0] * pow(w, v[1]) + v[2]) / (v[3] * tempC + 1.0) - log(v[4] * pow(w, v[5]) + 1.0);
+        return w * (lnMuSolute - log(liquidViscosityPureWaterLaliberte_(temperature)));
     }
 
     /*!
