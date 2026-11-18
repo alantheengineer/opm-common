@@ -31,6 +31,7 @@
 #include <opm/input/eclipse/EclipseState/Tables/AqutabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/BiofilmTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/BrineDensityTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/BrinelabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/CompvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/DiffMICPTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/EnkrvdTable.hpp>
@@ -69,8 +70,9 @@
 #include <opm/input/eclipse/EclipseState/Tables/RtempvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RvvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/RvwvdTable.hpp>
-#include <opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltSolubilityTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/SaltsoltTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SaltvdTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SgcwmisTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/SgfnTable.hpp>
@@ -548,6 +550,8 @@ std::optional<JFunc> make_jfunc(const Deck& deck) {
         addTables( "SALTVD", m_eqldims.getNumEquilRegions());
         addTables( "SALTPVD", m_eqldims.getNumEquilRegions());
         addTables( "SALTSOL", m_tabdims.getNumPVTTables());
+        addTables("SALTSOLT", m_tabdims.getNumPVTTables());
+        addTables("BRINELAB", m_tabdims.getNumPVTTables());
         addTables( "PERMFACT",  m_tabdims.getNumSatTables());
         addTables( "PCFACT",  m_tabdims.getNumSatTables());
         addTables( "BIOFPARA", m_tabdims.getNumSatTables());
@@ -619,6 +623,8 @@ std::optional<JFunc> make_jfunc(const Deck& deck) {
         initSimpleTableContainer<SaltpvdTable>(deck, "SALTPVD" , m_eqldims.getNumEquilRegions());
         initSimpleTableContainer<SaltvdTable>(deck, "SALTVD" , m_eqldims.getNumEquilRegions());
         initSimpleTableContainer<SaltsolTable>(deck, "SALTSOL" , m_tabdims.getNumPVTTables());
+        initSimpleTableContainer<SaltsoltTable>(deck, "SALTSOLT", m_tabdims.getNumPVTTables());
+        initSimpleTableContainer<BrinelabTable>(deck, "BRINELAB", m_tabdims.getNumPVTTables());
         initSimpleTableContainer<PermfactTable>(deck, "PERMFACT" , m_tabdims.getNumSatTables());
         initSimpleTableContainer<PcfactTable>(deck, "PCFACT" , m_tabdims.getNumSatTables());
         initSimpleTableContainer<BiofilmTable>(deck, "BIOFPARA" , m_tabdims.getNumSatTables());
@@ -1248,6 +1254,18 @@ std::optional<JFunc> make_jfunc(const Deck& deck) {
 
     const TableContainer& TableManager::getSaltsolTables() const {
         return getTables("SALTSOL");
+    }
+
+    const TableContainer&
+    TableManager::getSaltsoltTables() const
+    {
+        return getTables("SALTSOLT");
+    }
+
+    const TableContainer&
+    TableManager::getBrinelabTables() const
+    {
+        return getTables("BRINELAB");
     }
 
     const TableContainer& TableManager::getPcfactTables() const {

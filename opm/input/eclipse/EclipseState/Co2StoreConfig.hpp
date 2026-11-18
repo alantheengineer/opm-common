@@ -30,6 +30,7 @@
 namespace Opm {
 
 class Deck;
+class DeckKeyword;
 
 class Co2StoreConfig
 {
@@ -56,7 +57,10 @@ public:
 
     const std::vector<EzrokhiTable>& getDenaqaTables() const;
     const std::vector<EzrokhiTable>& getViscaqaTables() const;
+    // Salt composition of the first PVT region
     const SaltArray<double, SaltMassFraction>& saltComponents() const;
+    const SaltArray<double, SaltMassFraction>& saltComponents(std::size_t pvtRegionIdx) const;
+    std::size_t numSaltRegions() const;
     int actco2s() const;
 
     template<class Serializer>
@@ -68,7 +72,7 @@ public:
        serializer(cnames);
        serializer(denaqa_tables);
        serializer(viscaqa_tables);
-       serializer(saltArray);
+       serializer(saltArrays);
        serializer(activityModel);
     }
     bool operator==(const Co2StoreConfig& other) const;
@@ -81,11 +85,13 @@ private:
     SaltMixingType string2enumSalt(const std::string& input) const;
     LiquidMixingType string2enumLiquid(const std::string& input) const;
     GasMixingType string2enumGas(const std::string& input) const;
+    void initSalinitc(const DeckKeyword& keyword, std::size_t numPvtRegions);
 
     std::map<std::string, int> cnames;
     std::vector<EzrokhiTable> denaqa_tables;
     std::vector<EzrokhiTable> viscaqa_tables;
-    SaltArray<double, SaltMassFraction> saltArray;
+    // One per PVT region with SALINITC, otherwise one
+    std::vector<SaltArray<double, SaltMassFraction>> saltArrays {1};
     int activityModel{3};
 };
 }

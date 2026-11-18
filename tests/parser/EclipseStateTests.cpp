@@ -47,6 +47,8 @@ along with OPM.  If not, see <http://www.gnu.org/licenses/>.
 #include <opm/input/eclipse/EclipseState/Grid/NNC.hpp>
 #include <opm/common/utility/OpmInputError.hpp>
 
+#include <opm/input/eclipse/Parser/InputErrorAction.hpp>
+#include <opm/input/eclipse/Parser/ParseContext.hpp>
 #include <opm/input/eclipse/Parser/Parser.hpp>
 #include <opm/input/eclipse/Parser/ParserKeywords/E.hpp>
 
@@ -729,8 +731,11 @@ BOOST_AUTO_TEST_CASE(SALINITCtest)
         SALINITC
         0.1 0.2 0.3 0.4 0.5 0.6 /
     )";
+    // No TABDIMS: parse as flow does, with the default region count
+    const ParseContext context {
+        {{ParseContext::PARSE_MISSING_DIMS_KEYWORD, InputErrorAction::WARN}}};
     const Parser parser;
-    const auto deck = parser.parseString(deck_salinitc_input);
+    const auto deck = parser.parseString(deck_salinitc_input, context);
     const EclipseState state(deck);
     const Co2StoreConfig& config = state.getCo2StoreConfig();
 
@@ -750,6 +755,58 @@ BOOST_AUTO_TEST_CASE(SALINITCtest)
     BOOST_CHECK_CLOSE(salinitc[SaltIndex::MG], expectedSaltMassFrac[SaltIndex::MG], tol);
     BOOST_CHECK_CLOSE(salinitc[SaltIndex::CL], expectedSaltMassFrac[SaltIndex::CL], tol);
     BOOST_CHECK_CLOSE(salinitc[SaltIndex::SO4], expectedSaltMassFrac[SaltIndex::SO4], tol);
+}
+
+BOOST_AUTO_TEST_CASE(SALINITCRegions)
+{
+    const std::string grid = R"(
+        DIMENS
+        2 2 1 /
+        TABDIMS
+        1 2 /
+        GRID
+        DX
+        4*1 /
+        DY
+        4*1 /
+        DZ
+        4*1 /
+        TOPS
+        4*0.0 /
+        PORO
+        4*0.3 /
+        PROPS
+    )";
+    const auto deck
+        = Parser {}.parseString(std::string {"RUNSPEC\nWATER\nBRINE\nSALTMC\n/\n"} + grid + R"(
+        SALINITC
+        -- NA  K  CA  MG  CL   SO4  LI    SR  BR  HCO3 CO3 B
+           1.0 0  0   0   1.0  0    0     0   0   0    0   0 /
+           0.5 0  0   0   0.6  0    0.1   0   0   0    0   0.02 /
+    )");
+    const EclipseState state(deck);
+    const auto& config = state.getCo2StoreConfig();
+
+    BOOST_REQUIRE_EQUAL(config.numSaltRegions(), 2U);
+    BOOST_CHECK(config.saltComponents() == config.saltComponents(0));
+
+    // NaCl at 1 mol/kg
+    const auto& first = config.saltComponents(0);
+    BOOST_CHECK_CLOSE(first.sum(), 58.44e-3 / (1.0 + 58.44e-3), 0.05);
+    BOOST_CHECK_EQUAL(first[SaltIndex::LI], 0.0);
+
+    const auto molality = config.saltComponents(1).convert_to<SaltMolality>();
+    BOOST_CHECK_CLOSE(molality[SaltIndex::NA], 0.5, 1e-8);
+    BOOST_CHECK_CLOSE(molality[SaltIndex::LI], 0.1, 1e-8);
+    BOOST_CHECK_CLOSE(molality[SaltIndex::B], 0.02, 1e-8);
+
+    const auto negative
+        = Parser {}.parseString(std::string {"RUNSPEC\nWATER\nBRINE\nSALTMC\n/\n"} + grid + R"(
+        SALINITC
+           1.0 /
+           1.0 0 0 0 1.0 0 -0.1 /
+    )");
+    BOOST_CHECK_THROW(EclipseState {negative}, OpmInputError);
 }
 
 // Edited depths are held per active cell, so deactivating cells has to move

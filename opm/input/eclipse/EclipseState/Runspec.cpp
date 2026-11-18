@@ -22,6 +22,8 @@
 #include <opm/input/eclipse/EclipseState/Tables/Eqldims.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/Tabdims.hpp>
 
+#include <opm/common/utility/OpmInputError.hpp>
+#include <opm/common/utility/SaltArray.hpp>
 #include <opm/common/utility/TimeService.hpp>
 
 #include <opm/common/OpmLog/OpmLog.hpp>
@@ -48,8 +50,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <ctime>
+#include <initializer_list>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -811,27 +817,187 @@ const Tracers& Runspec::tracers() const {
     return this->m_tracers;
 }
 
+namespace
+{
+
+    template <class Option>
+    using SaltmcOptions = std::initializer_list<std::pair<std::string_view, Option>>;
+
+    template <class Option>
+    Option saltmcOption(const Opm::DeckKeyword& keyword,
+                        const std::string_view item,
+                        const std::string& value,
+                        const SaltmcOptions<Option> options)
+    {
+        for (const auto& [name, option] : options) {
+            if (value == name) {
+                return option;
+            }
+        }
+        throw Opm::OpmInputError(fmt::format("SALTMC {} {} is not a valid option", item, value),
+                                 keyword.location());
+    }
+
+    // Empty when the item is PRESET
+    template <class Option>
+    std::optional<Option> saltmcModel(const Opm::DeckKeyword& keyword,
+                                      const std::string_view item,
+                                      const std::string& value,
+                                      const SaltmcOptions<Option> options)
+    {
+        if (value == "PRESET") {
+            return std::nullopt;
+        }
+        return saltmcOption(keyword, item, value, options);
+    }
+
+    bool hasIonTracer(const Opm::Deck& deck)
+    {
+        using TRACER = Opm::ParserKeywords::TRACER;
+        if (!deck.hasKeyword<TRACER>()) {
+            return false;
+        }
+        for (const auto& keyword : deck.get<TRACER>()) {
+            for (const auto& record : keyword) {
+                const auto& name = record.getItem<TRACER::NAME>().getTrimmedString(0);
+                const auto& fluid = record.getItem<TRACER::FLUID>().getTrimmedString(0);
+                if (fluid == "WAT" && Opm::saltIndexFromName(name).has_value()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+} // Anonymous namespace
+
 Saltmc::Saltmc(const Deck& deck)
 {
     using SALTMC = ParserKeywords::SALTMC;
-    if (deck.hasKeyword<SALTMC>()) {
-        // Get record
-        const auto& keyword = deck.get<SALTMC>().back();
-        const auto& record = keyword[0];
-
-        // Use Laliberte-Cooper pure water density or not
-        const auto& laliberte_cooper =
-            record.getItem<SALTMC::LALIBERTE_COOPER_DENSITY>().get<std::string>(0);
-        m_laliberte_cooper_density = laliberte_cooper == "YES";
-
-        m_activated = true;
+    if (!deck.hasKeyword<SALTMC>()) {
+        return;
     }
+
+    const auto& keyword = deck.get<SALTMC>().back();
+    const auto& record = keyword[0];
+    const bool brine = deck.hasKeyword<ParserKeywords::BRINE>();
+    const bool co2store
+        = deck.hasKeyword<ParserKeywords::CO2STORE>() || deck.hasKeyword<ParserKeywords::CO2STOR>();
+    if (!brine && !co2store) {
+        throw OpmInputError("SALTMC requires BRINE or CO2STORE", keyword.location());
+    }
+
+    // Use Laliberte-Cooper pure water density or not
+    m_laliberte_cooper_density
+        = record.getItem<SALTMC::LALIBERTE_COOPER_DENSITY>().get<std::string>(0) == "YES";
+
+    m_transport
+        = saltmcOption<Transport>(keyword,
+                                  "TRANSPORT",
+                                  record.getItem<SALTMC::TRANSPORT>().get<std::string>(0),
+                                  {{"FIXED", Transport::Fixed}, {"TRACER", Transport::Tracer}});
+
+    const auto& presetItem = record.getItem<SALTMC::PRESET>();
+    if (presetItem.hasValue(0)) {
+        m_preset = saltmcOption<Preset>(
+            keyword,
+            "PRESET",
+            presetItem.get<std::string>(0),
+            {{"BASIN", Preset::Basin}, {"SALAR", Preset::Salar}, {"CO2STORE", Preset::Co2Store}});
+    } else {
+        m_preset = co2store ? Preset::Co2Store : Preset::Basin;
+    }
+
+    const auto density
+        = saltmcModel<DensityModel>(keyword,
+                                    "DENSITY_MODEL",
+                                    record.getItem<SALTMC::DENSITY_MODEL>().get<std::string>(0),
+                                    {{"MAO_DUAN_YOUNG", DensityModel::MaoDuanYoung},
+                                     {"LALIBERTE_COOPER", DensityModel::LaliberteCooper}});
+    const auto viscosity = saltmcModel<ViscosityModel>(
+        keyword,
+        "VISCOSITY_MODEL",
+        record.getItem<SALTMC::VISCOSITY_MODEL>().get<std::string>(0),
+        {{"MAO_DUAN", ViscosityModel::MaoDuan}, {"LALIBERTE", ViscosityModel::Laliberte}});
+    const auto enthalpy
+        = saltmcModel<EnthalpyModel>(keyword,
+                                     "ENTHALPY_MODEL",
+                                     record.getItem<SALTMC::ENTHALPY_MODEL>().get<std::string>(0),
+                                     {{"DRIESNER", EnthalpyModel::Driesner},
+                                      {"LALIBERTE", EnthalpyModel::Laliberte},
+                                      {"TABLE", EnthalpyModel::Table}});
+
+    m_range_policy
+        = saltmcOption<RangePolicy>(keyword,
+                                    "RANGE_POLICY",
+                                    record.getItem<SALTMC::RANGE_POLICY>().get<std::string>(0),
+                                    {{"WARN", RangePolicy::Warn},
+                                     {"CLAMP", RangePolicy::Clamp},
+                                     {"ERROR", RangePolicy::Error}});
+
+    // The CO2STORE water model has its own property models
+    if (co2store) {
+        if (m_preset != Preset::Co2Store) {
+            throw OpmInputError("SALTMC with CO2STORE supports PRESET CO2STORE only",
+                                keyword.location());
+        }
+        if (density || viscosity || enthalpy) {
+            throw OpmInputError("SALTMC with CO2STORE does not support model choices "
+                                "in items 4 to 6",
+                                keyword.location());
+        }
+        if (m_transport == Transport::Tracer) {
+            throw OpmInputError("SALTMC with CO2STORE does not support TRANSPORT TRACER",
+                                keyword.location());
+        }
+    } else if (m_preset == Preset::Co2Store) {
+        throw OpmInputError("SALTMC PRESET CO2STORE requires CO2STORE", keyword.location());
+    }
+
+    if (m_transport == Transport::Tracer && !hasIonTracer(deck)) {
+        throw OpmInputError("SALTMC TRANSPORT TRACER needs at least one water tracer named "
+                            "after a salt ion (NA, K, CA, MG, CL, SO4, LI, SR, BR, HCO3, CO3, B)",
+                            keyword.location());
+    }
+
+    switch (m_preset) {
+    case Preset::Basin:
+        m_density_model = DensityModel::MaoDuanYoung;
+        m_viscosity_model = ViscosityModel::MaoDuan;
+        m_enthalpy_model = EnthalpyModel::Driesner;
+        break;
+    case Preset::Salar:
+        m_density_model = DensityModel::LaliberteCooper;
+        m_viscosity_model = ViscosityModel::Laliberte;
+        m_enthalpy_model = EnthalpyModel::Laliberte;
+        break;
+    case Preset::Co2Store:
+        m_density_model = DensityModel::LaliberteCooper;
+        m_viscosity_model = ViscosityModel::Laliberte;
+        m_enthalpy_model = EnthalpyModel::Thco2mix;
+        break;
+    }
+    m_density_model = density.value_or(m_density_model);
+    m_viscosity_model = viscosity.value_or(m_viscosity_model);
+    m_enthalpy_model = enthalpy.value_or(m_enthalpy_model);
+
+    if (m_laliberte_cooper_density && m_density_model != DensityModel::LaliberteCooper) {
+        OpmLog::warning("SALTMC: LALIBERTE_COOPER_DENSITY is ignored unless the density "
+                        "model is LALIBERTE_COOPER");
+    }
+
+    m_activated = true;
 }
 
 bool Saltmc::operator==(const Saltmc& other) const
 {
     return this->m_activated == other.m_activated
-        && this->m_laliberte_cooper_density == other.m_laliberte_cooper_density;
+        && this->m_laliberte_cooper_density == other.m_laliberte_cooper_density
+        && this->m_transport == other.m_transport && this->m_preset == other.m_preset
+        && this->m_density_model == other.m_density_model
+        && this->m_viscosity_model == other.m_viscosity_model
+        && this->m_enthalpy_model == other.m_enthalpy_model
+        && this->m_range_policy == other.m_range_policy;
 }
 
 Saltmc Saltmc::serializationTestObject()
@@ -839,6 +1005,12 @@ Saltmc Saltmc::serializationTestObject()
     Saltmc saltmc;
     saltmc.m_activated = true;
     saltmc.m_laliberte_cooper_density = true;
+    saltmc.m_transport = Transport::Tracer;
+    saltmc.m_preset = Preset::Salar;
+    saltmc.m_density_model = DensityModel::MaoDuanYoung;
+    saltmc.m_viscosity_model = ViscosityModel::MaoDuan;
+    saltmc.m_enthalpy_model = EnthalpyModel::Table;
+    saltmc.m_range_policy = RangePolicy::Clamp;
 
     return saltmc;
 }

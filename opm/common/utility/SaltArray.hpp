@@ -42,6 +42,10 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace Opm
@@ -88,13 +92,13 @@ using SaltIndexList = FixedCapacityList<SaltIndex, numSaltIons>;
 enum class IonType { Cation, Anion, Neutral };
 
 /*!
- * Converts ion string name to index
+ * Converts ion name to index
  *
  * @param s Ion name
- * @return Index of salt ion
+ * @return Index of salt ion, or nothing if the name is not an ion
  */
-inline SaltIndex
-saltIndexFromString(const std::string& s)
+inline std::optional<SaltIndex>
+saltIndexFromName(std::string_view s)
 {
     if (s == "NA") {
         return SaltIndex::NA;
@@ -131,6 +135,21 @@ saltIndexFromString(const std::string& s)
     }
     if (s == "B") {
         return SaltIndex::B;
+    }
+    return std::nullopt;
+}
+
+/*!
+ * Converts ion string name to index
+ *
+ * @param s Ion name
+ * @return Index of salt ion
+ */
+inline SaltIndex
+saltIndexFromString(const std::string& s)
+{
+    if (const auto index = saltIndexFromName(s)) {
+        return *index;
     }
     throw std::invalid_argument("SaltIndex not valid!");
 }

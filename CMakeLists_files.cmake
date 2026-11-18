@@ -1070,6 +1070,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/input/eclipse/EclipseState/Tables/Aqudims.hpp
   opm/input/eclipse/EclipseState/Tables/AqutabTable.hpp
   opm/input/eclipse/EclipseState/Tables/BiofilmTable.hpp
+  opm/input/eclipse/EclipseState/Tables/BrinelabTable.hpp
   opm/input/eclipse/EclipseState/Tables/BrineDensityTable.hpp
   opm/input/eclipse/EclipseState/Tables/ColumnSchema.hpp
   opm/input/eclipse/EclipseState/Tables/CompvdTable.hpp
@@ -1130,6 +1131,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/input/eclipse/EclipseState/Tables/RwgsaltTable.hpp
   opm/input/eclipse/EclipseState/Tables/SaltSolubilityTable.hpp
   opm/input/eclipse/EclipseState/Tables/SaltpvdTable.hpp
+  opm/input/eclipse/EclipseState/Tables/SaltsoltTable.hpp
   opm/input/eclipse/EclipseState/Tables/SaltvdTable.hpp
   opm/input/eclipse/EclipseState/Tables/SgcwmisTable.hpp
   opm/input/eclipse/EclipseState/Tables/SgfnTable.hpp

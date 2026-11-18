@@ -3,12 +3,6 @@
   "sections": [
     "RUNSPEC"
   ],
-  "requires": [
-    "CO2STORE"
-  ],
-  "prohibits": [
-    "BRINE"
-  ],
   "size": 1,
   "items": [
     {
@@ -16,6 +10,41 @@
       "name": "LALIBERTE_COOPER_DENSITY",
       "value_type": "STRING",
       "default": "NO"
+    },
+    {
+      "item": 2,
+      "name": "TRANSPORT",
+      "value_type": "STRING",
+      "default": "FIXED"
+    },
+    {
+      "item": 3,
+      "name": "PRESET",
+      "value_type": "STRING"
+    },
+    {
+      "item": 4,
+      "name": "DENSITY_MODEL",
+      "value_type": "STRING",
+      "default": "PRESET"
+    },
+    {
+      "item": 5,
+      "name": "VISCOSITY_MODEL",
+      "value_type": "STRING",
+      "default": "PRESET"
+    },
+    {
+      "item": 6,
+      "name": "ENTHALPY_MODEL",
+      "value_type": "STRING",
+      "default": "PRESET"
+    },
+    {
+      "item": 7,
+      "name": "RANGE_POLICY",
+      "value_type": "STRING",
+      "default": "WARN"
     }
   ]
 }
