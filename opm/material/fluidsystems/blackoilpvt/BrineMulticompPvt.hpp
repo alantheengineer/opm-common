@@ -135,8 +135,37 @@ public:
 
     void setReferenceConditions(Scalar temperature, Scalar pressure);
 
-    /// Factors on the model density and viscosity, from lab calibration
+    /// Constant factors on the model density and viscosity
     void setCalibrationFactors(unsigned regionIdx, Scalar density, Scalar viscosity);
+
+    /// One BRINELAB measurement on the region's SALINITC brine, in SI units
+    struct LabPoint
+    {
+        Scalar temperature;
+        Scalar pressure;
+        Scalar density;
+        Scalar viscosity;
+
+        bool operator==(const LabPoint&) const = default;
+    };
+
+    /// Lab data to calibrate the models against; initEnd() turns it into factors
+    void setLabData(unsigned regionIdx, std::vector<LabPoint> points);
+
+    /// Calibration factors against temperature, held constant beyond the end points
+    struct Calibration
+    {
+        std::vector<Scalar> temperature {};
+        std::vector<Scalar> density {};
+        std::vector<Scalar> viscosity {};
+
+        bool operator==(const Calibration&) const = default;
+    };
+
+    const Calibration& calibration(unsigned regionIdx) const
+    {
+        return calibration_[regionIdx];
+    }
 
     /// Internal energy against temperature, for the TABLE enthalpy model
     void setInternalEnergyCurve(unsigned regionIdx, const TabulatedOneDFunction& curve);
@@ -177,19 +206,23 @@ public:
 
     Scalar waterReferenceDensity(unsigned regionIdx) const
     {
-        return densityFactor_[regionIdx] * referenceDensity_[regionIdx];
+        return surfaceDensityFactor_[regionIdx] * referenceDensity_[regionIdx];
     }
 
-    /// Calibration factor on density in use for a region
-    Scalar densityFactor(unsigned regionIdx) const
+    /// Calibration factor on density at a temperature
+    template <class Evaluation>
+    Evaluation densityFactor(unsigned regionIdx, const Evaluation& temperature) const
     {
-        return densityFactor_[regionIdx];
+        const auto& c = calibration_[regionIdx];
+        return factorAt_(c.temperature, c.density, temperature);
     }
 
-    /// Calibration factor on viscosity in use for a region
-    Scalar viscosityFactor(unsigned regionIdx) const
+    /// Calibration factor on viscosity at a temperature
+    template <class Evaluation>
+    Evaluation viscosityFactor(unsigned regionIdx, const Evaluation& temperature) const
     {
-        return viscosityFactor_[regionIdx];
+        const auto& c = calibration_[regionIdx];
+        return factorAt_(c.temperature, c.viscosity, temperature);
     }
 
     /// Salt mass fraction [kg salt/kg brine] from the BRINE salt concentration [kg/sm3]
@@ -318,7 +351,7 @@ public:
         const Evaluation h = enthalpyModel_ == EnthalpyModel::Driesner
             ? Brine::liquidEnthalpyLaliberteDriesner(temperature, pressure, salts)
             : Brine::liquidEnthalpyLaliberte(temperature, pressure, salts);
-        return h - pressure / density_(regionIdx, temperature, pressure, salts);
+        return h - pressure / calibratedDensity_(regionIdx, temperature, pressure, salts);
     }
 
     template <class Evaluation>
@@ -338,7 +371,7 @@ public:
                                   const Evaluation& saltConcentration) const
     {
         const auto salts = electrolytes(regionIdx, saltConcentration);
-        return viscosityFactor_[regionIdx] * viscosity_(regionIdx, temperature, pressure, salts);
+        return calibratedViscosity_(regionIdx, temperature, pressure, salts);
     }
 
     template <class Evaluation>
@@ -352,7 +385,6 @@ public:
             regionIdx, temperature, pressure, saltConcentration);
     }
 
-    // The density factor scales both densities, so it cancels here
     template <class Evaluation>
     Evaluation saturatedInverseFormationVolumeFactor(unsigned regionIdx,
                                                      const Evaluation& temperature,
@@ -360,7 +392,8 @@ public:
                                                      const Evaluation& saltConcentration) const
     {
         const auto salts = electrolytes(regionIdx, saltConcentration);
-        return density_(regionIdx, temperature, pressure, salts) / referenceDensity_[regionIdx];
+        return calibratedDensity_(regionIdx, temperature, pressure, salts)
+            / waterReferenceDensity(regionIdx);
     }
 
     template <class FluidState, class LhsEval = typename FluidState::ValueType>
@@ -373,8 +406,8 @@ public:
             = BlackOil::template getSaltConcentration_<FluidState, LhsEval>(fluidState, regionIdx);
         const auto salts = electrolytes(
             regionIdx, saltConcentration, BlackOil::getBrineComposition_(fluidState));
-        return {density_(regionIdx, T, p, salts) / referenceDensity_[regionIdx],
-                viscosityFactor_[regionIdx] * viscosity_(regionIdx, T, p, salts)};
+        return {calibratedDensity_(regionIdx, T, p, salts) / waterReferenceDensity(regionIdx),
+                calibratedViscosity_(regionIdx, T, p, salts)};
     }
 
     template <class Evaluation>
@@ -429,6 +462,50 @@ public:
 
 private:
     void computeFitRanges_(unsigned regionIdx);
+    void calibrate_(unsigned regionIdx, const ElectrolyteList<Scalar>& salts);
+
+    // Piecewise linear in temperature, constant beyond the end points; 1 without data
+    template <class Evaluation>
+    static Evaluation factorAt_(const std::vector<Scalar>& temperature,
+                                const std::vector<Scalar>& factor,
+                                const Evaluation& T)
+    {
+        if (temperature.empty()) {
+            return Evaluation(1.0);
+        }
+        if (T <= temperature.front()) {
+            return Evaluation(factor.front());
+        }
+        if (T >= temperature.back()) {
+            return Evaluation(factor.back());
+        }
+        std::size_t i = 1;
+        while (T > temperature[i]) {
+            ++i;
+        }
+        const Scalar slope = (factor[i] - factor[i - 1]) / (temperature[i] - temperature[i - 1]);
+        return factor[i - 1] + slope * (T - temperature[i - 1]);
+    }
+
+    template <class Evaluation>
+    Evaluation calibratedDensity_(unsigned regionIdx,
+                                  const Evaluation& temperature,
+                                  const Evaluation& pressure,
+                                  const ElectrolyteList<Evaluation>& salts) const
+    {
+        return densityFactor(regionIdx, temperature)
+            * density_(regionIdx, temperature, pressure, salts);
+    }
+
+    template <class Evaluation>
+    Evaluation calibratedViscosity_(unsigned regionIdx,
+                                    const Evaluation& temperature,
+                                    const Evaluation& pressure,
+                                    const ElectrolyteList<Evaluation>& salts) const
+    {
+        return viscosityFactor(regionIdx, temperature)
+            * viscosity_(regionIdx, temperature, pressure, salts);
+    }
 
     template <class Evaluation>
     static Evaluation clamp_(const Evaluation& x, Scalar lo, Scalar hi)
@@ -505,8 +582,9 @@ private:
     std::vector<SaltArray<Scalar, SaltMassFraction>> salinity_ {};
     std::vector<Scalar> saltMassFraction_ {};
     std::vector<Scalar> referenceDensity_ {};
-    std::vector<Scalar> densityFactor_ {};
-    std::vector<Scalar> viscosityFactor_ {};
+    std::vector<std::vector<LabPoint>> labData_ {};
+    std::vector<Calibration> calibration_ {};
+    std::vector<Scalar> surfaceDensityFactor_ {};
     std::vector<TabulatedOneDFunction> internalEnergyCurves_ {};
     std::vector<std::array<FitRange, 2>> fitRanges_ {};
 
