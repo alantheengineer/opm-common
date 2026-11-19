@@ -573,3 +573,197 @@ BOOST_AUTO_TEST_CASE(CalibrationFactorGetters)
     BOOST_CHECK_EQUAL(pvt.densityFactor(0), 1.03);
     BOOST_CHECK_EQUAL(pvt.viscosityFactor(0), 0.95);
 }
+
+namespace
+{
+
+Pvt
+pvtFor(const Opm::SaltArray<double, Opm::SaltMolality>& molality,
+       Pvt::DensityModel density,
+       Pvt::ViscosityModel viscosity)
+{
+    Pvt pvt;
+    pvt.setNumRegions(1);
+    pvt.setSalinity(0, molality.convert_to<Opm::SaltMassFraction>());
+    pvt.setModels(density, viscosity, Pvt::EnthalpyModel::Driesner);
+    pvt.setEnableSaltConcentration(true);
+    pvt.initEnd();
+    return pvt;
+}
+
+// Salt concentration giving the region's ion ratios at the ionic strength
+double
+concentrationAt(const Pvt& pvt, double ionicStrength)
+{
+    const double c = pvt.salinity(0).sum() * pvt.waterReferenceDensity(0);
+    const double i0 = pvt.ionicStrength(0, c);
+    // Ionic strength is not linear in mass fraction, so step to it
+    double lo = 0.0;
+    double hi = 4.0 * c * ionicStrength / i0;
+    for (int k = 0; k < 100; ++k) {
+        const double mid = 0.5 * (lo + hi);
+        (pvt.ionicStrength(0, mid) < ionicStrength ? lo : hi) = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
+constexpr double kelvin = 273.15;
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(BasinFitRange)
+{
+    // NaCl and CaCl2 both over 5% of the salt mass
+    const auto pvt = directPvt(Pvt::DensityModel::MaoDuanYoung,
+                               Pvt::ViscosityModel::MaoDuan,
+                               Pvt::EnthalpyModel::Driesner);
+
+    // Density: NaCl to 573 K, 100 MPa, 6 mol/kg; CaCl2 to 523 K, 60 MPa, 6 mol/kg (I = 18)
+    const auto& density = pvt.fitRange(0, Pvt::FitProperty::Density);
+    BOOST_CHECK_CLOSE(density.minTemperature, kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxTemperature, 523.0, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxPressure, 60e6, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxIonicStrength, 6.0, 1e-10);
+    BOOST_CHECK_EQUAL(density.maxSaltMassFraction, Pvt::FitRange::open);
+
+    // Viscosity: NaCl to 623 K, 100 MPa, 6 mol/kg; the CaCl2 fit to 575 K, 60 MPa
+    const auto& viscosity = pvt.fitRange(0, Pvt::FitProperty::Viscosity);
+    BOOST_CHECK_CLOSE(viscosity.maxTemperature, 575.0, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxPressure, 60e6, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxIonicStrength, 6.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(SalarFitRange)
+{
+    const auto pvt = directPvt(Pvt::DensityModel::LaliberteCooper,
+                               Pvt::ViscosityModel::Laliberte,
+                               Pvt::EnthalpyModel::Laliberte);
+
+    // Laliberte NaCl and CaCl2: density 0 to 140 and 0 to 100 C, w 0.26 and 0.513;
+    // viscosity 5 to 154 and 0 to 100 C, w 0.264 and 0.51. No pressure limit.
+    const auto& density = pvt.fitRange(0, Pvt::FitProperty::Density);
+    BOOST_CHECK_CLOSE(density.minTemperature, kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxTemperature, 100.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxSaltMassFraction, 0.260, 1e-10);
+    BOOST_CHECK_EQUAL(density.maxPressure, Pvt::FitRange::open);
+    BOOST_CHECK_EQUAL(density.maxIonicStrength, Pvt::FitRange::open);
+
+    const auto& viscosity = pvt.fitRange(0, Pvt::FitProperty::Viscosity);
+    BOOST_CHECK_CLOSE(viscosity.minTemperature, 5.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxTemperature, 100.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxSaltMassFraction, 0.264, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(FitRangeSkipsTraceSalts)
+{
+    // K2SO4 is about 1.5% of the salt mass, so its narrow Laliberte range is not applied
+    Opm::SaltArray<double, Opm::SaltMolality> molality;
+    molality[SaltIndex::NA] = 2.0;
+    molality[SaltIndex::CL] = 2.0;
+    molality[SaltIndex::K] = 0.02;
+    molality[SaltIndex::SO4] = 0.01;
+    const auto pvt
+        = pvtFor(molality, Pvt::DensityModel::LaliberteCooper, Pvt::ViscosityModel::Laliberte);
+
+    const auto& density = pvt.fitRange(0, Pvt::FitProperty::Density);
+    BOOST_CHECK_CLOSE(density.maxTemperature, 140.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxSaltMassFraction, 0.260, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(BasinFitRangeLaliberteBinary)
+{
+    // MgCl2 has no Mao and Duan viscosity, so its Laliberte binary at the ionic strength
+    // limits the range: 15 to 70 C and w 0.386, which is I = 3 w / ((1 - w) M)
+    Opm::SaltArray<double, Opm::SaltMolality> molality;
+    molality[SaltIndex::NA] = 1.0;
+    molality[SaltIndex::MG] = 0.5;
+    molality[SaltIndex::CL] = 2.0;
+    const auto pvt
+        = pvtFor(molality, Pvt::DensityModel::MaoDuanYoung, Pvt::ViscosityModel::MaoDuan);
+
+    const double mass = Opm::SaltElectrolytes<double>::molarMass(Pvt::Electrolyte::MgCl2);
+    const double maxIonic = 3.0 * 0.386 / ((1.0 - 0.386) * mass);
+    const auto& viscosity = pvt.fitRange(0, Pvt::FitProperty::Viscosity);
+    BOOST_CHECK_CLOSE(viscosity.minTemperature, 15.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxTemperature, 70.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxIonicStrength, std::min(6.0, maxIonic), 1e-10);
+
+    // MgCl2 density is Mao and Duan: 543 K, 30 MPa, 3 mol/kg (I = 9)
+    const auto& density = pvt.fitRange(0, Pvt::FitProperty::Density);
+    BOOST_CHECK_CLOSE(density.maxTemperature, 543.0, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxPressure, 30e6, 1e-10);
+    BOOST_CHECK_CLOSE(density.maxIonicStrength, 6.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(OutOfRange)
+{
+    const auto pvt = directPvt(Pvt::DensityModel::MaoDuanYoung,
+                               Pvt::ViscosityModel::MaoDuan,
+                               Pvt::EnthalpyModel::Driesner);
+    const double c = concentrationAt(pvt, 3.0);
+    constexpr unsigned both = Pvt::densityOutOfRange | Pvt::viscosityOutOfRange;
+
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, tRes, pRes, c), 0U);
+    // Above CaCl2 density's 523 K, below the viscosity limit of 575 K
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, 540.0, pRes, c), Pvt::densityOutOfRange);
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, 600.0, pRes, c), both);
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, 270.0, pRes, c), both);
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, tRes, 70e6, c), both);
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, tRes, pRes, concentrationAt(pvt, 6.5)), both);
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, tRes, pRes, concentrationAt(pvt, 5.9)), 0U);
+
+    // The cell path takes the cell's ionic strength
+    const auto cell = pvt.cellFractions(pvt.salinity(0));
+    BOOST_CHECK_EQUAL(pvt.outOfRange(0, 540.0, pRes, c, &cell), Pvt::densityOutOfRange);
+}
+
+BOOST_AUTO_TEST_CASE(ClampToFitRange)
+{
+    using Eval = Opm::DenseAd::Evaluation<double, 1>;
+    auto pvt = directPvt(Pvt::DensityModel::MaoDuanYoung,
+                         Pvt::ViscosityModel::MaoDuan,
+                         Pvt::EnthalpyModel::Driesner);
+    const double c = concentrationAt(pvt, 3.0);
+    const double bIn = pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, c);
+    const double b523 = pvt.inverseFormationVolumeFactor(0, 523.0, pRes, 0.0, c);
+    const double b540 = pvt.inverseFormationVolumeFactor(0, 540.0, pRes, 0.0, c);
+    const double mu540 = pvt.viscosity(0, 540.0, pRes, 0.0, c);
+    const double b70 = pvt.inverseFormationVolumeFactor(0, tRes, 70e6, 0.0, c);
+    const double b60 = pvt.inverseFormationVolumeFactor(0, tRes, 60e6, 0.0, c);
+    BOOST_CHECK(std::abs(b540 - b523) > 1e-4 * b523);
+
+    pvt.setClampToFitRange(true);
+    BOOST_CHECK_EQUAL(pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, c), bIn);
+    BOOST_CHECK_CLOSE(pvt.inverseFormationVolumeFactor(0, 540.0, pRes, 0.0, c), b523, 1e-12);
+    BOOST_CHECK_CLOSE(pvt.inverseFormationVolumeFactor(0, tRes, 70e6, 0.0, c), b60, 1e-12);
+    BOOST_CHECK(std::abs(b70 - b60) > 1e-6 * b60);
+
+    // Viscosity has its own range, so 540 K is not clamped there
+    BOOST_CHECK_EQUAL(pvt.viscosity(0, 540.0, pRes, 0.0, c), mu540);
+
+    // Beyond the range the clamped variable has no derivative
+    const Eval T = Eval::createVariable(540.0, 0);
+    const Eval b = pvt.inverseFormationVolumeFactor(0, T, Eval(pRes), Eval(0.0), Eval(c));
+    BOOST_CHECK_EQUAL(b.derivative(0), 0.0);
+
+    // Salinity is not clamped
+    const double cHigh = concentrationAt(pvt, 6.5);
+    pvt.setClampToFitRange(false);
+    const double bHigh = pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, cHigh);
+    pvt.setClampToFitRange(true);
+    BOOST_CHECK_EQUAL(pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, cHigh), bHigh);
+}
+
+BOOST_AUTO_TEST_CASE(RangePolicyFromDeck)
+{
+    {
+        const Setup setup(deckWith("1* 1* 1* 1* 1* 1* CLAMP", salinitc));
+        Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+        BOOST_CHECK(brinePvt(multiplexer, setup).clampToFitRange());
+    }
+    {
+        const Setup setup(deckWith("", salinitc));
+        Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+        BOOST_CHECK(!brinePvt(multiplexer, setup).clampToFitRange());
+    }
+}

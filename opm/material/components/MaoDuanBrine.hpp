@@ -52,9 +52,10 @@ class MaoDuanBrine
     using Electrolyte = typename SaltElectrolytes<Scalar>::Electrolyte;
 
 public:
-    /// Ranges of Table 3: T [K], P [MPa] and molality [mol/kg]
+    /// Fitted range: T [K], P [MPa] and molality [mol/kg]
     struct Range
     {
+        Scalar minT;
         Scalar maxT;
         Scalar maxP;
         Scalar maxMolality;
@@ -66,10 +67,17 @@ public:
         return index_(electrolyte).has_value();
     }
 
+    /// Fitted range of the volume model, from the paper's abstract and Section 3
     static Range range(const Electrolyte electrolyte)
     {
         const auto& s = salts_[*index_(electrolyte)];
-        return {s.maxT, s.maxP, s.maxMolality};
+        return {s.minT, s.maxT, s.maxP, s.maxMolality};
+    }
+
+    /// Fitted range of the viscosity model
+    static Range viscosityRange(const Electrolyte electrolyte)
+    {
+        return viscosity_[*viscosityIndex_(electrolyte)].range;
     }
 
     /// Ionic strength of one mole of the electrolyte in 1 kg of water
@@ -207,6 +215,7 @@ private:
     struct ViscositySet
     {
         Electrolyte electrolyte;
+        Range range;
         Scalar tempScale; // K
         std::array<Scalar, 4> a;
         std::array<Scalar, 3> b;
@@ -225,21 +234,21 @@ private:
 
     // clang-format off
     static constexpr std::array<ViscositySet, 4> viscosity_ = {{
-        // Mao and Duan (2009), Table 3, T in K
-        {Electrolyte::LiCl, 1.0,
+        // Mao and Duan (2009), Table 3, T in K; valid ranges from its Section 4
+        {Electrolyte::LiCl, {273.15, 623.0, 100.0, 16.7}, 1.0,
          {0.62204136e-2, 0.54436974e-3, -0.40443190e-6, 0},
          {0.14987325e-1, -0.66617390e-4, 0.52113332e-7},
          {0.12101624e-5, 0.17772678e-6}},
-        {Electrolyte::NaCl, 1.0,
+        {Electrolyte::NaCl, {273.15, 623.0, 100.0, 6.0}, 1.0,
          {-0.21319213, 0.13651589e-2, -0.12191756e-5, 0},
          {0.69161945e-1, -0.27292263e-3, 0.20852448e-6},
          {-0.25988855e-2, 0.77989227e-5}},
-        {Electrolyte::KCl, 1.0,
+        {Electrolyte::KCl, {273.15, 623.0, 100.0, 4.5}, 1.0,
          {-0.42122934, 0.18286059e-2, -0.13603098e-5, 0},
          {0.11380205e-1, 0.47541391e-5, -0.99280575e-7},
          {0, 0}},
-        // Fitted for this code, T / 300 K
-        {Electrolyte::CaCl2, 300.0,
+        // Fitted for this code, T / 300 K; range of the data it was fitted to
+        {Electrolyte::CaCl2, {273.15, 575.0, 60.0, 6.0}, 300.0,
          {-1.3438892472e+00, 3.0573535084e+00, -1.7606044540e+00, 3.3193259481e-01},
          {2.4475740832e-01, -3.5265818370e-01, 1.1381394527e-01},
          {1.2693964694e-03, 0}},
@@ -262,6 +271,7 @@ private:
         Scalar nuAnion;
         Scalar zAnion; // magnitude
         Scalar refMolality;
+        Scalar minT;
         Scalar maxT;
         Scalar maxP;
         Scalar maxMolality;
@@ -281,37 +291,37 @@ private:
     // Tables 2 and 3. BaCl2 is left out, as it is not one of our electrolytes.
     // clang-format off
     static constexpr std::array<Salt, 6> salts_ = {{
-        {Electrolyte::LiCl, 1, 1, 1, 1, 10.0, 564.0, 40.0, 10.0,
+        {Electrolyte::LiCl, 1, 1, 1, 1, 10.0, 273.15, 564.0, 40.0, 10.0,
          {1.17271480E+03, 1.40527916E-01, -5.53962649E-04, 1.72402126E-06,
           -1.57184556E+00, 8.89959461E-03, -1.52090064E-05, 0,
           7.33553879E-03, 4.06701494E-04, -2.38873863E-06, 3.94900863E-09, -3.56131664E-02,
           -6.18472877E-05, 3.00484214E-06, -1.02229075E-08, 0, 2.35592818E-04,
           -2.68117086E-04, -2.17228726E-05, 1.19732313E-07, -1.51104808E-10, 3.83403994E-04}},
-        {Electrolyte::NaCl, 1, 1, 1, 1, 6.0, 573.0, 100.0, 6.0,
+        {Electrolyte::NaCl, 1, 1, 1, 1, 6.0, 273.15, 573.0, 100.0, 6.0,
          {1.06607098E+03, -8.39622456E-03, 5.35429127E-04, 7.55373789E-07,
           -4.19512335E-01, 1.45082899E-03, -3.47807732E-06, 0,
           1.10913788E-02, 1.14498252E-03, -5.51181270E-06, 7.05483955E-09, -5.05734723E-02,
           -1.32747828E-04, 4.77261581E-06, -1.76888377E-08, 0, 6.40541237E-04,
           3.07698827E-04, -1.64042763E-04, 7.06784935E-07, -6.50338372E-10, -4.50906014E-04}},
-        {Electrolyte::KCl, 1, 1, 1, 1, 6.0, 543.0, 50.0, 4.5,
+        {Electrolyte::KCl, 1, 1, 1, 1, 6.0, 273.15, 543.0, 50.0, 4.5,
          {2.90812061E+02, 6.54111195E+00, -1.61831978E-02, 1.46280384E-05,
           1.41397987E+01, -1.07266230E-01, 2.64506021E-04, -2.19789708E-07,
           3.02182158E-02, -2.15621394E-03, 9.24163206E-06, -1.10089434E-08, 2.87018859E-02,
           -6.73119697E-04, 1.68332473E-04, -7.99645640E-07, 1.11881560E-09, -6.59292385E-03,
           -2.02369103E-03, -1.70609099E-04, 1.00510108E-06, -1.86624642E-09, 1.91919166E-02}},
-        {Electrolyte::MgCl2, 1, 2, 2, 1, 2.0, 543.0, 30.0, 3.0,
+        {Electrolyte::MgCl2, 1, 2, 2, 1, 2.0, 273.15, 543.0, 30.0, 3.0,
          {1.18880927E+03, -1.43194546E+00, 3.87973220E-03, -2.20330377E-06,
           6.38745038E+00, -5.51728055E-02, 1.50231562E-04, -1.35757912E-07,
           8.43627549E-03, 5.25365072E-03, -1.87204100E-05, 4.20263897E-08, -1.18062548E+00,
           6.07424747E-04, -1.20268210E-04, 5.23784551E-07, -8.23940319E-10, 9.75167613E-03,
           -4.92959181E-04, -2.73642775E-04, 5.42602386E-07, -1.95602825E-09, 1.00921935E-01}},
-        {Electrolyte::CaCl2, 1, 2, 2, 1, 5.0, 523.0, 60.0, 6.0,
+        {Electrolyte::CaCl2, 1, 2, 2, 1, 5.0, 273.15, 523.0, 60.0, 6.0,
          {1.12080057E+03, -2.61669538E-01, 1.52042960E-03, -6.89131095E-07,
           -5.11802652E-01, 2.22234857E-03, -5.66464544E-06, 2.92950266E-09,
           2.43934633E-02, -1.42746873E-03, 7.35840529E-06, -9.43615480E-09, -5.18606814E-02,
           -6.16536928E-05, -1.04523561E-05, 4.52637296E-08, -1.05076158E-10, 2.31544709E-03,
           -1.09663211E-03, 1.90836111E-04, -9.25997994E-07, 1.54388261E-09, -1.29354832E-02}},
-        {Electrolyte::SrCl2, 1, 2, 2, 1, 2.0, 473.0, 2.0, 2.0,
+        {Electrolyte::SrCl2, 1, 2, 2, 1, 2.0, 298.15, 473.0, 2.0, 2.0,
          {1.11894213E+03, -7.37321458E-01, 1.77908655E-03, 0,
           0, 0, 0, 0,
           2.21225680E-02, 6.62517291E-04, -2.37296050E-06, 0, 0,
