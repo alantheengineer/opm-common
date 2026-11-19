@@ -49,6 +49,8 @@
 
 #include <opm/input/eclipse/EclipseState/Co2StoreConfig.hpp>
 
+#include <opm/material/fluidsystems/blackoilpvt/BrineSalinity.hpp>
+
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
@@ -234,10 +236,7 @@ public:
         OPM_TIMEFUNCTION_LOCAL(Subsystem::PvtProps);
         SaltArray<Evaluation, SaltMassFraction> salinityArray;
         if (enableSaltConcentration_) {
-            salinityArray = salinityFromConcentration(regionIdx,
-                                                 temperature,
-                                                 pressure,
-                                                 saltConcentration);
+            salinityArray = salinityFromConcentration(regionIdx, saltConcentration);
         } else {
             salinityArray = salinity(regionIdx);
         }
@@ -286,10 +285,7 @@ public:
         OPM_TIMEFUNCTION_LOCAL(Subsystem::PvtProps);
         SaltArray<Evaluation, SaltMassFraction> salinityArray;
         if (enableSaltConcentration_) {
-            salinityArray = salinityFromConcentration(regionIdx,
-                                                 temperature,
-                                                 pressure,
-                                                 saltConcentration);
+            salinityArray = salinityFromConcentration(regionIdx, saltConcentration);
         } else {
             salinityArray = salinity(regionIdx);
         }
@@ -354,10 +350,7 @@ public:
         OPM_TIMEFUNCTION_LOCAL(Subsystem::PvtProps);
         SaltArray<Evaluation, SaltMassFraction> salinityArray;
         if (enableSaltConcentration_) {
-            salinityArray = salinityFromConcentration(regionIdx,
-                                                      temperature,
-                                                      pressure,
-                                                      saltConcentration);
+            salinityArray = salinityFromConcentration(regionIdx, saltConcentration);
         } else {
             salinityArray = salinity(regionIdx);
         }
@@ -383,10 +376,7 @@ public:
         OPM_TIMEFUNCTION_LOCAL(Subsystem::PvtProps);
         SaltArray<Evaluation, SaltMassFraction> salinityArray;
         if (enableSaltConcentration_) {
-            salinityArray = salinityFromConcentration(regionIdx,
-                                                 temperature,
-                                                 pressure,
-                                                 saltConcentration);
+            salinityArray = salinityFromConcentration(regionIdx, saltConcentration);
         } else {
             salinityArray = salinity(regionIdx);
         }
@@ -514,10 +504,7 @@ public:
     {
         SaltArray<Evaluation, SaltMassFraction> salinityArray;
         if (enableSaltConcentration_) {
-            salinityArray = salinityFromConcentration(regionIdx,
-                                                      temperature,
-                                                      pressure,
-                                                      saltConcentration);
+            salinityArray = salinityFromConcentration(regionIdx, saltConcentration);
         } else {
             salinityArray = salinity(regionIdx);
         }
@@ -933,36 +920,10 @@ private:
 
     template <class LhsEval>
     OPM_HOST_DEVICE SaltArray<LhsEval, SaltMassFraction>
-    salinityFromConcentration(unsigned /*regionIdx*/,
-                              const LhsEval& T,
-                              const LhsEval& P,
-                              const LhsEval& saltConcentration) const
+    salinityFromConcentration(unsigned regionIdx, const LhsEval& saltConcentration) const
     {
-        // Convert concentration [kg/m³] to mass fraction [kg_salt/kg_solution].
-        // First approximation using pure water density
-        const LhsEval rho_w = H2O::liquidDensity(T, P, true);
-        const LhsEval saltApprox = saltConcentration / rho_w;
-        const Scalar NaMolarMass = saltMolarMass<Scalar>(SaltIndex::NA);
-        const Scalar ClMolarMass = saltMolarMass<Scalar>(SaltIndex::CL);
-        const Scalar NaClMolarMass = NaMolarMass + ClMolarMass;
-        SaltArray<LhsEval, SaltMassFraction> S;
-        S[SaltIndex::NA] = saltApprox * NaMolarMass / NaClMolarMass;
-        S[SaltIndex::CL] = saltApprox * ClMolarMass / NaClMolarMass;
-
-        // Improved estimate using brine density
-        LhsEval rho_brine;
-        if (enableMultiCompSalt_) {
-            rho_brine = Brine::liquidDensityMulticompSalt(
-                T, P, S, useH2ODensity_, extrapolate, legacyPairing);
-        } else {
-            rho_brine = Brine::liquidDensity(T, P, S.sum(), extrapolate);
-        }
-
-        // Final salt mass fraction
-        const LhsEval salt = saltConcentration / rho_brine;
-        S[SaltIndex::NA] = salt * NaMolarMass / NaClMolarMass;
-        S[SaltIndex::CL] = salt * ClMolarMass / NaClMolarMass;
-        return S;
+        return BrineSalinity::massFractions(
+            saltConcentration, brineReferenceDensity_[regionIdx], salinity_[regionIdx]);
     }
 
 #if HAVE_CUDA
