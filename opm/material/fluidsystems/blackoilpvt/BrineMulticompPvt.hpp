@@ -32,7 +32,9 @@
 #include <opm/material/components/H2O.hpp>
 #include <opm/material/fluidsystems/BlackOilFunctions.hpp>
 
+#include <array>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -56,6 +58,11 @@ class Schedule;
  *
  * In TRACER mode a cell can carry its own electrolyte fractions, built by cellFractions()
  * from the ion tracers. Calls given those fractions use them; the rest use the region's.
+ *
+ * Each region has a fitted range per property: the overlap of the ranges of the models that
+ * evaluate its main electrolytes. outOfRange() reports the properties a state falls outside
+ * of. With clamping on, temperature and pressure are held inside the range before evaluation;
+ * salinity is not clamped.
  */
 template <class Scalar>
 class BrineMulticompPvt
@@ -72,6 +79,29 @@ public:
     enum class DensityModel { MaoDuanYoung, LaliberteCooper };
     enum class ViscosityModel { MaoDuan, Laliberte };
     enum class EnthalpyModel { Driesner, Laliberte, Table };
+
+    enum class FitProperty { Density, Viscosity };
+
+    /// Bits returned by outOfRange()
+    static constexpr unsigned densityOutOfRange = 1;
+    static constexpr unsigned viscosityOutOfRange = 2;
+
+    /// Electrolytes with a smaller share of the salt mass are left out of the fitted range
+    static constexpr Scalar minRangeShare = 0.05;
+
+    /// Fitted range of one property in one region
+    struct FitRange
+    {
+        static constexpr Scalar open = std::numeric_limits<Scalar>::max();
+
+        Scalar minTemperature {0.0}; // K
+        Scalar maxTemperature {open}; // K
+        Scalar maxPressure {open}; // Pa
+        Scalar maxIonicStrength {open}; // mol/kg water
+        Scalar maxSaltMassFraction {open};
+
+        bool operator==(const FitRange&) const = default;
+    };
 
     BrineMulticompPvt() = default;
 
@@ -110,6 +140,17 @@ public:
 
     /// Internal energy against temperature, for the TABLE enthalpy model
     void setInternalEnergyCurve(unsigned regionIdx, const TabulatedOneDFunction& curve);
+
+    /// Hold temperature and pressure inside the fitted range when evaluating
+    void setClampToFitRange(bool yesno)
+    {
+        clampToFitRange_ = yesno;
+    }
+
+    bool clampToFitRange() const
+    {
+        return clampToFitRange_;
+    }
 
     /// Finish setup: pair the ions and compute the reference densities
     void initEnd();
@@ -218,6 +259,36 @@ public:
         return Brine::meanSaltMolarMass(electrolytes(regionIdx, saltConcentration, cell));
     }
 
+    const FitRange& fitRange(unsigned regionIdx, FitProperty property) const
+    {
+        return fitRanges_[regionIdx][static_cast<std::size_t>(property)];
+    }
+
+    /// The properties a state is outside the fitted range of, as densityOutOfRange and
+    /// viscosityOutOfRange bits; cell fractions as for electrolytes()
+    unsigned outOfRange(unsigned regionIdx,
+                        Scalar temperature,
+                        Scalar pressure,
+                        Scalar saltConcentration,
+                        const ElectrolyteFractions* cell = nullptr) const
+    {
+        const Scalar w = saltMassFraction(regionIdx, saltConcentration);
+        const Scalar ionic = ionicStrength(regionIdx, saltConcentration, cell);
+        const auto outside = [&](const FitRange& r) {
+            return temperature < r.minTemperature || temperature > r.maxTemperature
+                || pressure > r.maxPressure || ionic > r.maxIonicStrength
+                || w > r.maxSaltMassFraction;
+        };
+        unsigned flags = 0;
+        if (outside(fitRange(regionIdx, FitProperty::Density))) {
+            flags |= densityOutOfRange;
+        }
+        if (outside(fitRange(regionIdx, FitProperty::Viscosity))) {
+            flags |= viscosityOutOfRange;
+        }
+        return flags;
+    }
+
     template <class Evaluation>
     Evaluation internalEnergy(unsigned regionIdx,
                               const Evaluation& temperature,
@@ -247,7 +318,7 @@ public:
         const Evaluation h = enthalpyModel_ == EnthalpyModel::Driesner
             ? Brine::liquidEnthalpyLaliberteDriesner(temperature, pressure, salts)
             : Brine::liquidEnthalpyLaliberte(temperature, pressure, salts);
-        return h - pressure / density_(temperature, pressure, salts);
+        return h - pressure / density_(regionIdx, temperature, pressure, salts);
     }
 
     template <class Evaluation>
@@ -267,7 +338,7 @@ public:
                                   const Evaluation& saltConcentration) const
     {
         const auto salts = electrolytes(regionIdx, saltConcentration);
-        return viscosityFactor_[regionIdx] * viscosity_(temperature, pressure, salts);
+        return viscosityFactor_[regionIdx] * viscosity_(regionIdx, temperature, pressure, salts);
     }
 
     template <class Evaluation>
@@ -289,7 +360,7 @@ public:
                                                      const Evaluation& saltConcentration) const
     {
         const auto salts = electrolytes(regionIdx, saltConcentration);
-        return density_(temperature, pressure, salts) / referenceDensity_[regionIdx];
+        return density_(regionIdx, temperature, pressure, salts) / referenceDensity_[regionIdx];
     }
 
     template <class FluidState, class LhsEval = typename FluidState::ValueType>
@@ -302,8 +373,8 @@ public:
             = BlackOil::template getSaltConcentration_<FluidState, LhsEval>(fluidState, regionIdx);
         const auto salts = electrolytes(
             regionIdx, saltConcentration, BlackOil::getBrineComposition_(fluidState));
-        return {density_(T, p, salts) / referenceDensity_[regionIdx],
-                viscosityFactor_[regionIdx] * viscosity_(T, p, salts)};
+        return {density_(regionIdx, T, p, salts) / referenceDensity_[regionIdx],
+                viscosityFactor_[regionIdx] * viscosity_(regionIdx, T, p, salts)};
     }
 
     template <class Evaluation>
@@ -357,10 +428,54 @@ public:
     bool operator==(const BrineMulticompPvt& data) const;
 
 private:
+    void computeFitRanges_(unsigned regionIdx);
+
     template <class Evaluation>
-    Evaluation density_(const Evaluation& temperature,
+    static Evaluation clamp_(const Evaluation& x, Scalar lo, Scalar hi)
+    {
+        if (x < lo) {
+            return Evaluation(lo);
+        }
+        if (x > hi) {
+            return Evaluation(hi);
+        }
+        return x;
+    }
+
+    template <class Evaluation>
+    Evaluation density_(unsigned regionIdx,
+                        const Evaluation& temperature,
                         const Evaluation& pressure,
                         const ElectrolyteList<Evaluation>& salts) const
+    {
+        if (clampToFitRange_) {
+            const auto& r = fitRange(regionIdx, FitProperty::Density);
+            return densityAt_(clamp_(temperature, r.minTemperature, r.maxTemperature),
+                              clamp_(pressure, Scalar {0.0}, r.maxPressure),
+                              salts);
+        }
+        return densityAt_(temperature, pressure, salts);
+    }
+
+    template <class Evaluation>
+    Evaluation viscosity_(unsigned regionIdx,
+                          const Evaluation& temperature,
+                          const Evaluation& pressure,
+                          const ElectrolyteList<Evaluation>& salts) const
+    {
+        if (clampToFitRange_) {
+            const auto& r = fitRange(regionIdx, FitProperty::Viscosity);
+            return viscosityAt_(clamp_(temperature, r.minTemperature, r.maxTemperature),
+                                clamp_(pressure, Scalar {0.0}, r.maxPressure),
+                                salts);
+        }
+        return viscosityAt_(temperature, pressure, salts);
+    }
+
+    template <class Evaluation>
+    Evaluation densityAt_(const Evaluation& temperature,
+                          const Evaluation& pressure,
+                          const ElectrolyteList<Evaluation>& salts) const
     {
         if (densityModel_ == DensityModel::MaoDuanYoung) {
             return Brine::liquidDensityMaoDuan(temperature, pressure, salts);
@@ -375,9 +490,9 @@ private:
     }
 
     template <class Evaluation>
-    Evaluation viscosity_(const Evaluation& temperature,
-                          const Evaluation& pressure,
-                          const ElectrolyteList<Evaluation>& salts) const
+    Evaluation viscosityAt_(const Evaluation& temperature,
+                            const Evaluation& pressure,
+                            const ElectrolyteList<Evaluation>& salts) const
     {
         if (viscosityModel_ == ViscosityModel::MaoDuan) {
             return Brine::liquidViscosityMaoDuan(temperature, pressure, salts);
@@ -393,6 +508,7 @@ private:
     std::vector<Scalar> densityFactor_ {};
     std::vector<Scalar> viscosityFactor_ {};
     std::vector<TabulatedOneDFunction> internalEnergyCurves_ {};
+    std::vector<std::array<FitRange, 2>> fitRanges_ {};
 
     DensityModel densityModel_ {DensityModel::MaoDuanYoung};
     ViscosityModel viscosityModel_ {ViscosityModel::MaoDuan};
@@ -400,6 +516,7 @@ private:
     PairingMethod pairing_ {PairingMethod::Proportional};
     bool laliberteCooperWater_ {false};
     bool enableSaltConcentration_ {false};
+    bool clampToFitRange_ {false};
     Scalar referenceTemperature_ {288.71};
     Scalar referencePressure_ {1.01325e5};
 };

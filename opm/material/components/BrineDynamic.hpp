@@ -670,7 +670,7 @@ public:
         const Evaluation sumW = soluteMassFraction_(electrolytes);
         Evaluation result = 0.0;
         for (const auto& salt : electrolytes) {
-            result += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+            result += molalityOf_(salt, sumW) * ionicStrengthPerMole(salt.first);
         }
         return result;
     }
@@ -972,7 +972,7 @@ public:
 
         Evaluation ionicStrength = 0.0;
         for (const auto& salt : electrolytes) {
-            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole(salt.first);
         }
 
         // Per kg of water: mass [kg] and volume [m3]
@@ -983,7 +983,7 @@ public:
             const Evaluation m = molalityOf_(salt, sumW);
             mass += m * mm;
             if (MaoDuan::covers(salt.first)) {
-                const Evaluation mBinary = ionicStrength / ionicStrengthPerMole_(salt.first);
+                const Evaluation mBinary = ionicStrength / ionicStrengthPerMole(salt.first);
                 volume += m
                     * MaoDuan::apparentMolarVolume(
                               salt.first, temperature, pressure, mBinary, rhoW);
@@ -1039,7 +1039,7 @@ public:
 
         Evaluation ionicStrength = 0.0;
         for (const auto& salt : electrolytes) {
-            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+            ionicStrength += molalityOf_(salt, sumW) * ionicStrengthPerMole(salt.first);
         }
         if (ionicStrength <= 0.0) {
             return muW;
@@ -1047,7 +1047,7 @@ public:
 
         Evaluation lnRelative = 0.0;
         for (const auto& salt : electrolytes) {
-            const Scalar ionic = ionicStrengthPerMole_(salt.first);
+            const Scalar ionic = ionicStrengthPerMole(salt.first);
             if (ionic == 0.0) {
                 continue;
             }
@@ -1059,6 +1059,38 @@ public:
             lnRelative += fraction * lnBinary;
         }
         return muW * exp(lnRelative);
+    }
+
+    /// Fitted range of a Laliberte correlation: T [K] and electrolyte mass fraction
+    struct LaliberteRange
+    {
+        Scalar minT;
+        Scalar maxT;
+        Scalar maxMassFraction;
+    };
+
+    /// Fitted range of the Laliberte and Cooper density; boric acid is left open
+    static LaliberteRange laliberteDensityRange(const Electrolyte electrolyte)
+    {
+        return toKelvin_(densityRanges_[static_cast<std::size_t>(electrolyte)]);
+    }
+
+    /// Fitted range of the Laliberte viscosity; boric acid is left open
+    static LaliberteRange laliberteViscosityRange(const Electrolyte electrolyte)
+    {
+        return toKelvin_(viscosityRanges_[static_cast<std::size_t>(electrolyte)]);
+    }
+
+    /// Ionic strength of one mole of the electrolyte in 1 kg of water [mol/kg]
+    static Scalar ionicStrengthPerMole(const Electrolyte electrolyte)
+    {
+        const auto& p = SaltElectrolytes<Scalar>::pairings[static_cast<std::size_t>(electrolyte)];
+        if (SaltElectrolytes<Scalar>::isNeutral(p)) {
+            return 0.0;
+        }
+        const Scalar zc = ionStrength(p.cation);
+        const Scalar za = ionStrength(p.anion);
+        return 0.5 * (p.cationsPer * zc * zc + p.anionsPer * za * za);
     }
 
 private:
@@ -1080,18 +1112,6 @@ private:
                                   const Evaluation& sumW)
     {
         return salt.second / (SaltElectrolytes<Scalar>::molarMass(salt.first) * (1.0 - sumW));
-    }
-
-    // Ionic strength of one mole of the electrolyte in 1 kg of water
-    static Scalar ionicStrengthPerMole_(const Electrolyte electrolyte)
-    {
-        const auto& p = SaltElectrolytes<Scalar>::pairings[static_cast<std::size_t>(electrolyte)];
-        if (SaltElectrolytes<Scalar>::isNeutral(p)) {
-            return 0.0;
-        }
-        const Scalar zc = ionStrength(p.cation);
-        const Scalar za = ionStrength(p.anion);
-        return 0.5 * (p.cationsPer * zc * zc + p.anionsPer * za * za);
     }
 
     // ln(viscosity / water viscosity) of a binary solution from Laliberte (2007), eqs 8 and 12
@@ -1484,6 +1504,60 @@ private:
          8684.04398141182, 12.7276295460364},
         // B(OH)3, not used
         {unused_, unused_, unused_, unused_, unused_, unused_},
+    }};
+    // clang-format on
+
+    static constexpr Scalar openT_ = std::numeric_limits<Scalar>::max();
+
+    static LaliberteRange toKelvin_(const LaliberteRange& rangeC)
+    {
+        constexpr Scalar zeroC = 273.15;
+        const Scalar maxT = rangeC.maxT < openT_ ? rangeC.maxT + zeroC : openT_;
+        return {rangeC.minT + zeroC, maxT, rangeC.maxMassFraction};
+    }
+
+    // Fitted ranges, t in C. Density: the first seven from Laliberte and Cooper (2004),
+    // Table 3; viscosity: the first seven from Laliberte (2007), Table 2. The rest span the
+    // consistent data points behind the refit in Laliberte (2009), Supporting Information.
+    // clang-format off
+    static constexpr std::array<LaliberteRange, numElectrolytes> densityRanges_ = {{
+        {0.0, 100.0, 0.513},    // CaCl2
+        {0.0, 125.0, 0.280},    // KCl
+        {0.0, 98.67, 0.110},    // K2SO4
+        {0.0, 100.0, 0.327},    // MgCl2
+        {0.0, 125.0, 0.260},    // MgSO4
+        {0.0, 140.0, 0.260},    // NaCl
+        {0.0, 125.0, 0.240},    // Na2SO4
+        {-5.0, 127.05, 0.454},  // LiCl
+        {0.0, 65.0, 0.260},     // Li2SO4
+        {15.0, 98.81, 0.284},   // SrCl2
+        {0.0, 95.0, 0.548},     // NaBr
+        {0.0, 95.0, 0.504},     // KBr
+        {0.0, 125.0, 0.141},    // NaHCO3
+        {0.0, 100.14, 0.209},   // Na2CO3
+        {5.0, 95.0, 0.344},     // KHCO3
+        {5.0, 95.0, 0.440},     // K2CO3
+        {-273.15, openT_, 1.0}, // B(OH)3
+    }};
+
+    static constexpr std::array<LaliberteRange, numElectrolytes> viscosityRanges_ = {{
+        {0.0, 100.0, 0.510},    // CaCl2
+        {5.0, 150.0, 0.306},    // KCl
+        {0.0, 89.5, 0.155},     // K2SO4
+        {15.0, 70.0, 0.386},    // MgCl2
+        {15.0, 150.0, 0.303},   // MgSO4
+        {5.0, 154.0, 0.264},    // NaCl
+        {15.0, 150.0, 0.331},   // Na2SO4
+        {-5.0, 100.0, 0.460},   // LiCl
+        {5.0, 128.58, 0.260},   // Li2SO4
+        {10.0, 91.34, 0.454},   // SrCl2
+        {5.0, 60.0, 0.540},     // NaBr
+        {0.0, 95.0, 0.462},     // KBr
+        {20.0, 30.0, 0.084},    // NaHCO3
+        {20.0, 90.0, 0.301},    // Na2CO3
+        {25.0, 25.0, 0.247},    // KHCO3
+        {19.0, 89.0, 0.511},    // K2CO3
+        {-273.15, openT_, 1.0}, // B(OH)3
     }};
     // clang-format on
 };

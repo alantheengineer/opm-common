@@ -151,7 +151,7 @@ namespace {
         return {
             "1OVERBG",  "1OVERBO",  "1OVERBW",
             "ACIP",     "ACIS",     "ALLPROPS", "BASIC",    "BG",       "BO",
-            "BRINE_CD", "BRINE_CV", "BRINE_I",  "BRINE_MW", "BRINE_SI",
+            "BRINE_CD", "BRINE_CV", "BRINE_EX", "BRINE_I",  "BRINE_MW", "BRINE_SI",
             "BW",       "CELLINDX", "COMPRESS", "CONV",     "DEN",      "DENG",
             "DENO",     "DENW",     "DRAIN",    "DRAINAGE", "DYNREG",   "FIP",
             "FLORES",   "FLORES-",  "FLOWS",    "FLOWS-",   "FREQ",     "GIMULT",

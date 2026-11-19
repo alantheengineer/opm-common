@@ -2026,7 +2026,7 @@ BOOST_AUTO_TEST_CASE(BrineRptRstMnemonics)
     const std::string deckData = grid() + R"(
 SOLUTION
 RPTRST
-  BASIC=2 BRINE_MW BRINE_I BRINE_SI BRINE_CD BRINE_CV /
+  BASIC=2 BRINE_MW BRINE_I BRINE_SI BRINE_CD BRINE_CV BRINE_EX /
 SCHEDULE
 DATES
  10 OKT 2008 /
@@ -2044,8 +2044,8 @@ DATES
     ctx.update(ParseContext::RPT_UNKNOWN_MNEMONIC, InputErrorAction::THROW_EXCEPTION);
     const Schedule sched(deck, es, ctx, errors, {});
 
-    const auto expected
-        = std::array {"BRINE_CD"sv, "BRINE_CV"sv, "BRINE_I"sv, "BRINE_MW"sv, "BRINE_SI"sv};
+    const auto expected = std::array {
+        "BRINE_CD"sv, "BRINE_CV"sv, "BRINE_EX"sv, "BRINE_I"sv, "BRINE_MW"sv, "BRINE_SI"sv};
     const auto kw_list = filter_keywords(sched.rst_keywords(0));
     BOOST_CHECK_EQUAL_COLLECTIONS(expected.begin(), expected.end(), kw_list.begin(), kw_list.end());
 }
