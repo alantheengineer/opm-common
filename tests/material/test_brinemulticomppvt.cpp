@@ -673,7 +673,8 @@ BOOST_AUTO_TEST_CASE(FitRangeSkipsTraceSalts)
 BOOST_AUTO_TEST_CASE(BasinFitRangeLaliberteBinary)
 {
     // MgCl2 has no Mao and Duan viscosity, so its Laliberte binary at the ionic strength
-    // limits the range: 15 to 70 C and w 0.386, which is I = 3 w / ((1 - w) M)
+    // limits the range: from 15 C and to w 0.386, which is I = 3 w / ((1 - w) M). Its upper
+    // temperature is the 200 C of the Magomedov and Alkhasov check, not Laliberte's 70 C.
     Opm::SaltArray<double, Opm::SaltMolality> molality;
     molality[SaltIndex::NA] = 1.0;
     molality[SaltIndex::MG] = 0.5;
@@ -685,7 +686,8 @@ BOOST_AUTO_TEST_CASE(BasinFitRangeLaliberteBinary)
     const double maxIonic = 3.0 * 0.386 / ((1.0 - 0.386) * mass);
     const auto& viscosity = pvt.fitRange(0, Pvt::FitProperty::Viscosity);
     BOOST_CHECK_CLOSE(viscosity.minTemperature, 15.0 + kelvin, 1e-10);
-    BOOST_CHECK_CLOSE(viscosity.maxTemperature, 70.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxTemperature, 200.0 + kelvin, 1e-10);
+    BOOST_CHECK_CLOSE(viscosity.maxPressure, 100e6, 1e-10);
     BOOST_CHECK_CLOSE(viscosity.maxIonicStrength, std::min(6.0, maxIonic), 1e-10);
 
     // MgCl2 density is Mao and Duan: 543 K, 30 MPa, 3 mol/kg (I = 9)
@@ -693,6 +695,19 @@ BOOST_AUTO_TEST_CASE(BasinFitRangeLaliberteBinary)
     BOOST_CHECK_CLOSE(density.maxTemperature, 543.0, 1e-10);
     BOOST_CHECK_CLOSE(density.maxPressure, 30e6, 1e-10);
     BOOST_CHECK_CLOSE(density.maxIonicStrength, 6.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(SalarMgCl2KeepsLaliberteRange)
+{
+    // The extended MgCl2 range belongs to the basin viscosity only
+    Opm::SaltArray<double, Opm::SaltMolality> molality;
+    molality[SaltIndex::NA] = 1.0;
+    molality[SaltIndex::MG] = 0.5;
+    molality[SaltIndex::CL] = 2.0;
+    const auto pvt
+        = pvtFor(molality, Pvt::DensityModel::LaliberteCooper, Pvt::ViscosityModel::Laliberte);
+    BOOST_CHECK_CLOSE(
+        pvt.fitRange(0, Pvt::FitProperty::Viscosity).maxTemperature, 70.0 + kelvin, 1e-10);
 }
 
 BOOST_AUTO_TEST_CASE(OutOfRange)
