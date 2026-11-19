@@ -24,17 +24,56 @@
 
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
 #include <opm/input/eclipse/EclipseState/Runspec.hpp>
+#include <opm/input/eclipse/EclipseState/Tables/BrinelabTable.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/TableManager.hpp>
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <string>
+#include <utility>
 
 #include <stdexcept>
 
 namespace Opm
 {
+
+namespace
+{
+
+    // Factors this far from 1 suggest the SALINITC composition does not match the lab brine
+    constexpr double maxQuietCalibration = 0.10;
+
+    template <class Calibration>
+    void logCalibration(std::size_t region, const Calibration& c)
+    {
+        if (c.temperature.empty()) {
+            return;
+        }
+        const auto [dMin, dMax] = std::ranges::minmax(c.density);
+        const auto [vMin, vMax] = std::ranges::minmax(c.viscosity);
+        OpmLog::info(
+            fmt::format("SALTMC region {}: BRINELAB calibration at {} temperatures, "
+                        "density factor {:.4f} to {:.4f}, viscosity factor {:.4f} to {:.4f}",
+                        region,
+                        c.temperature.size(),
+                        dMin,
+                        dMax,
+                        vMin,
+                        vMax));
+        const auto off = [](auto f) { return std::abs(f - 1.0) > maxQuietCalibration; };
+        if (off(dMin) || off(dMax) || off(vMin) || off(vMax)) {
+            OpmLog::warning(fmt::format("SALTMC region {}: the BRINELAB data differ from the model "
+                                        "by more than {:.0f}%; check that SALINITC matches the lab "
+                                        "brine",
+                                        region,
+                                        100 * maxQuietCalibration));
+        }
+    }
+
+} // namespace
 
 template <class Scalar>
 void
@@ -104,6 +143,19 @@ BrineMulticompPvt<Scalar>::initFromState(const EclipseState& eclState, const Sch
         }
     }
 
+    const auto& brinelab = tables.getBrinelabTables();
+    for (std::size_t regionIdx = 0; regionIdx < std::min(regions, brinelab.size()); ++regionIdx) {
+        const auto& table = brinelab.getTable<BrinelabTable>(regionIdx);
+        std::vector<LabPoint> points;
+        for (std::size_t row = 0; row < table.numRows(); ++row) {
+            points.push_back({static_cast<Scalar>(table.getTemperatureColumn()[row]),
+                              static_cast<Scalar>(table.getPressureColumn()[row]),
+                              static_cast<Scalar>(table.getDensityColumn()[row]),
+                              static_cast<Scalar>(table.getViscosityColumn()[row])});
+        }
+        setLabData(regionIdx, std::move(points));
+    }
+
     initEnd();
 
     const auto describe = [](const FitRange& r) {
@@ -132,6 +184,7 @@ BrineMulticompPvt<Scalar>::initFromState(const EclipseState& eclState, const Sch
                                  regionIdx + 1,
                                  describe(fitRange(regionIdx, FitProperty::Density)),
                                  describe(fitRange(regionIdx, FitProperty::Viscosity))));
+        logCalibration(regionIdx + 1, calibration(regionIdx));
     }
 }
 
@@ -143,8 +196,9 @@ BrineMulticompPvt<Scalar>::setNumRegions(std::size_t numRegions)
     salinity_.resize(numRegions);
     saltMassFraction_.resize(numRegions, 0.0);
     referenceDensity_.resize(numRegions, 0.0);
-    densityFactor_.resize(numRegions, 1.0);
-    viscosityFactor_.resize(numRegions, 1.0);
+    labData_.resize(numRegions);
+    calibration_.resize(numRegions);
+    surfaceDensityFactor_.resize(numRegions, 1.0);
     fitRanges_.resize(numRegions);
 }
 
@@ -186,8 +240,21 @@ BrineMulticompPvt<Scalar>::setCalibrationFactors(unsigned regionIdx,
     if (!(density > 0.0) || !(viscosity > 0.0)) {
         throw std::invalid_argument("Brine calibration factors must be positive");
     }
-    densityFactor_[regionIdx] = density;
-    viscosityFactor_[regionIdx] = viscosity;
+    calibration_[regionIdx] = Calibration {{referenceTemperature_}, {density}, {viscosity}};
+    surfaceDensityFactor_[regionIdx] = density;
+}
+
+template <class Scalar>
+void
+BrineMulticompPvt<Scalar>::setLabData(unsigned regionIdx, std::vector<LabPoint> points)
+{
+    for (const auto& p : points) {
+        if (!(p.temperature > 0.0) || !(p.pressure > 0.0) || !(p.density > 0.0)
+            || !(p.viscosity > 0.0)) {
+            throw std::invalid_argument("BRINELAB values must be positive");
+        }
+    }
+    labData_[regionIdx] = std::move(points);
 }
 
 template <class Scalar>
@@ -227,7 +294,46 @@ BrineMulticompPvt<Scalar>::initEnd()
         }
         referenceDensity_[regionIdx]
             = density_(regionIdx, referenceTemperature_, referencePressure_, salts);
+        calibrate_(regionIdx, salts);
+        surfaceDensityFactor_[regionIdx] = densityFactor(regionIdx, referenceTemperature_);
     }
+}
+
+// The factor at each lab point is the measured value over the model for the SALINITC brine;
+// points at the same temperature are averaged
+template <class Scalar>
+void
+BrineMulticompPvt<Scalar>::calibrate_(unsigned regionIdx, const ElectrolyteList<Scalar>& salts)
+{
+    const auto& points = labData_[regionIdx];
+    if (points.empty()) {
+        return;
+    }
+    std::vector<std::array<Scalar, 3>> ratios;
+    ratios.reserve(points.size());
+    for (const auto& p : points) {
+        const Scalar density = density_(regionIdx, p.temperature, p.pressure, salts);
+        const Scalar viscosity = viscosity_(regionIdx, p.temperature, p.pressure, salts);
+        ratios.push_back({p.temperature, p.density / density, p.viscosity / viscosity});
+    }
+    std::ranges::sort(ratios, {}, [](const auto& r) { return r[0]; });
+
+    Calibration c;
+    for (std::size_t i = 0; i < ratios.size();) {
+        std::size_t j = i;
+        Scalar density = 0.0;
+        Scalar viscosity = 0.0;
+        for (; j < ratios.size() && ratios[j][0] - ratios[i][0] < 1e-6; ++j) {
+            density += ratios[j][1];
+            viscosity += ratios[j][2];
+        }
+        const auto n = static_cast<Scalar>(j - i);
+        c.temperature.push_back(ratios[i][0]);
+        c.density.push_back(density / n);
+        c.viscosity.push_back(viscosity / n);
+        i = j;
+    }
+    calibration_[regionIdx] = std::move(c);
 }
 
 // Mao and Duan evaluate each binary at the brine's ionic strength, so their molality limit
@@ -315,8 +421,8 @@ BrineMulticompPvt<Scalar>::operator==(const BrineMulticompPvt& data) const
 {
     return unitElectrolytes_ == data.unitElectrolytes_ && salinity_ == data.salinity_
         && saltMassFraction_ == data.saltMassFraction_
-        && referenceDensity_ == data.referenceDensity_ && densityFactor_ == data.densityFactor_
-        && viscosityFactor_ == data.viscosityFactor_
+        && referenceDensity_ == data.referenceDensity_ && labData_ == data.labData_
+        && calibration_ == data.calibration_ && surfaceDensityFactor_ == data.surfaceDensityFactor_
         && internalEnergyCurves_ == data.internalEnergyCurves_
         && densityModel_ == data.densityModel_ && viscosityModel_ == data.viscosityModel_
         && enthalpyModel_ == data.enthalpyModel_ && pairing_ == data.pairing_
