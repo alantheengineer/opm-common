@@ -139,6 +139,18 @@ public:
         return densityFactor_[regionIdx] * referenceDensity_[regionIdx];
     }
 
+    /// Calibration factor on density in use for a region
+    Scalar densityFactor(unsigned regionIdx) const
+    {
+        return densityFactor_[regionIdx];
+    }
+
+    /// Calibration factor on viscosity in use for a region
+    Scalar viscosityFactor(unsigned regionIdx) const
+    {
+        return viscosityFactor_[regionIdx];
+    }
+
     /// Salt mass fraction [kg salt/kg brine] from the BRINE salt concentration [kg/sm3]
     template <class Evaluation>
     Evaluation saltMassFraction(unsigned regionIdx, const Evaluation& saltConcentration) const
@@ -186,6 +198,24 @@ public:
             result.push_back({electrolyte, fraction * w});
         }
         return result;
+    }
+
+    /// Ionic strength [mol/kg water]; cell fractions as for electrolytes()
+    template <class Evaluation>
+    Evaluation ionicStrength(unsigned regionIdx,
+                             const Evaluation& saltConcentration,
+                             const ElectrolyteFractions* cell = nullptr) const
+    {
+        return Brine::ionicStrength(electrolytes(regionIdx, saltConcentration, cell));
+    }
+
+    /// Mean molar mass of the dissolved salt [kg/mol]; cell fractions as for electrolytes()
+    template <class Evaluation>
+    Evaluation meanSaltMolarMass(unsigned regionIdx,
+                                 const Evaluation& saltConcentration,
+                                 const ElectrolyteFractions* cell = nullptr) const
+    {
+        return Brine::meanSaltMolarMass(electrolytes(regionIdx, saltConcentration, cell));
     }
 
     template <class Evaluation>
