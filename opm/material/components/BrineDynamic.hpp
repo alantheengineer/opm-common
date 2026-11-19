@@ -659,6 +659,44 @@ public:
     }
 
     /*!
+     * Ionic strength of a brine, I = 1/2 sum of m z^2 over its ions
+     *
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Ionic strength [mol/kg water]
+     */
+    template <class Evaluation>
+    static Evaluation ionicStrength(const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const Evaluation sumW = soluteMassFraction_(electrolytes);
+        Evaluation result = 0.0;
+        for (const auto& salt : electrolytes) {
+            result += molalityOf_(salt, sumW) * ionicStrengthPerMole_(salt.first);
+        }
+        return result;
+    }
+
+    /*!
+     * Mass-weighted mean molar mass of the dissolved electrolytes
+     *
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @return Mean molar mass [kg/mol], or 0 without salt
+     */
+    template <class Evaluation>
+    static Evaluation meanSaltMolarMass(const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        Evaluation mass = 0.0;
+        Evaluation moles = 0.0;
+        for (const auto& [electrolyte, w] : electrolytes) {
+            mass += w;
+            moles += w / SaltElectrolytes<Scalar>::molarMass(electrolyte);
+        }
+        if (!(moles > 0.0)) {
+            return 0.0;
+        }
+        return mass / moles;
+    }
+
+    /*!
      * Density of pure water from Laliberte and Cooper (2004), eq 12
      *
      * @param temperature Temperature [K]

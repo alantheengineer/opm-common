@@ -2020,3 +2020,32 @@ DATES
     BOOST_CHECK(sched.rst_keywords(0) == expected);
     BOOST_CHECK(sched.rst_keywords(1) == expected);
 }
+
+BOOST_AUTO_TEST_CASE(BrineRptRstMnemonics)
+{
+    const std::string deckData = grid() + R"(
+SOLUTION
+RPTRST
+  BASIC=2 BRINE_MW BRINE_I BRINE_SI BRINE_CD BRINE_CV /
+SCHEDULE
+DATES
+ 10 OKT 2008 /
+/
+)";
+
+    using namespace std::literals::string_view_literals;
+
+    ParseContext ctx;
+    ErrorGuard errors;
+    const auto deck = Parser {}.parseString(deckData, ctx, errors);
+    const EclipseState es(deck);
+
+    // Unknown mnemonics throw here, so this checks that the brine ones are known
+    ctx.update(ParseContext::RPT_UNKNOWN_MNEMONIC, InputErrorAction::THROW_EXCEPTION);
+    const Schedule sched(deck, es, ctx, errors, {});
+
+    const auto expected
+        = std::array {"BRINE_CD"sv, "BRINE_CV"sv, "BRINE_I"sv, "BRINE_MW"sv, "BRINE_SI"sv};
+    const auto kw_list = filter_keywords(sched.rst_keywords(0));
+    BOOST_CHECK_EQUAL_COLLECTIONS(expected.begin(), expected.end(), kw_list.begin(), kw_list.end());
+}

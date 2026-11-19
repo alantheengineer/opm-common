@@ -147,9 +147,11 @@ namespace {
 
     std::vector<std::string> rptRstBaseMnemonics()
     {
+        // clang-format off
         return {
             "1OVERBG",  "1OVERBO",  "1OVERBW",
             "ACIP",     "ACIS",     "ALLPROPS", "BASIC",    "BG",       "BO",
+            "BRINE_CD", "BRINE_CV", "BRINE_I",  "BRINE_MW", "BRINE_SI",
             "BW",       "CELLINDX", "COMPRESS", "CONV",     "DEN",      "DENG",
             "DENO",     "DENW",     "DRAIN",    "DRAINAGE", "DYNREG",   "FIP",
             "FLORES",   "FLORES-",  "FLOWS",    "FLOWS-",   "FREQ",     "GIMULT",
@@ -163,6 +165,7 @@ namespace {
             "VELOCITY", "VELOIL",   "VELWAT",   "VGAS",     "VISC",     "VOIL",
             "VWAT",
         };
+        // clang-format on
     }
 
     std::vector<std::string> rptRstCompositionalMnemonics()

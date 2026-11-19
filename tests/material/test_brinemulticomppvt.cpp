@@ -23,6 +23,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <opm/common/utility/SaltArray.hpp>
+#include <opm/common/utility/SaltElectrolytes.hpp>
 
 #include <opm/input/eclipse/Deck/Deck.hpp>
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
@@ -507,4 +508,68 @@ BOOST_AUTO_TEST_CASE(CellFractionsSumToPaired)
     for (const float f : empty) {
         BOOST_CHECK_EQUAL(f, 0.0f);
     }
+}
+
+BOOST_AUTO_TEST_CASE(IonicStrengthAndMeanMolarMass)
+{
+    using Electrolyte = Pvt::Electrolyte;
+    const double mNaCl = Opm::SaltElectrolytes<double>::molarMass(Electrolyte::NaCl);
+    const double mCaCl2 = Opm::SaltElectrolytes<double>::molarMass(Electrolyte::CaCl2);
+    const double mLiCl = Opm::SaltElectrolytes<double>::molarMass(Electrolyte::LiCl);
+
+    // 1 mol/kg NaCl: I = 1; 1 mol/kg CaCl2: I = 3
+    Pvt::ElectrolyteList<double> nacl;
+    nacl.push_back({Electrolyte::NaCl, mNaCl / (1.0 + mNaCl)});
+    BOOST_CHECK_CLOSE(Brine::ionicStrength(nacl), 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(Brine::meanSaltMolarMass(nacl), mNaCl, 1e-10);
+
+    Pvt::ElectrolyteList<double> cacl2;
+    cacl2.push_back({Electrolyte::CaCl2, mCaCl2 / (1.0 + mCaCl2)});
+    BOOST_CHECK_CLOSE(Brine::ionicStrength(cacl2), 3.0, 1e-10);
+
+    // Equal masses of NaCl and LiCl
+    Pvt::ElectrolyteList<double> mixed;
+    mixed.push_back({Electrolyte::NaCl, 0.05});
+    mixed.push_back({Electrolyte::LiCl, 0.05});
+    BOOST_CHECK_CLOSE(Brine::meanSaltMolarMass(mixed), 0.1 / (0.05 / mNaCl + 0.05 / mLiCl), 1e-10);
+
+    BOOST_CHECK_EQUAL(Brine::meanSaltMolarMass(Pvt::ElectrolyteList<double> {}), 0.0);
+    BOOST_CHECK_EQUAL(Brine::ionicStrength(Pvt::ElectrolyteList<double> {}), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(RegionIonicStrength)
+{
+    const Setup setup(deckWith("", salinitc));
+    Opm::WaterPvtMultiplexer<double, true, true> multiplexer;
+    const auto& pvt = brinePvt(multiplexer, setup);
+
+    // Region 1 at its SALINITC salt: I = 1/2 sum m z^2 from the SALINITC molalities
+    //   NA 2.0, K 0.05, CA 0.4, MG 0.05, CL 2.97, SR 0.01
+    const double expected = 0.5 * (2.0 + 0.05 + 4 * 0.4 + 4 * 0.05 + 2.97 + 4 * 0.01);
+    const double c = pvt.salinity(0).sum() * pvt.waterReferenceDensity(0);
+    BOOST_CHECK_CLOSE(pvt.ionicStrength(0, c), expected, 1e-6);
+
+    // The same through the cell path
+    const auto cell = pvt.cellFractions(pvt.salinity(0));
+    BOOST_CHECK_CLOSE(pvt.ionicStrength(0, c, &cell), expected, 1e-4);
+
+    // Mostly NaCl with some CaCl2, so between the two molar masses
+    const double mw = pvt.meanSaltMolarMass(0, c);
+    BOOST_CHECK(mw > Opm::SaltElectrolytes<double>::molarMass(Pvt::Electrolyte::NaCl));
+    BOOST_CHECK(mw < Opm::SaltElectrolytes<double>::molarMass(Pvt::Electrolyte::CaCl2));
+
+    // No salt
+    BOOST_CHECK_EQUAL(pvt.ionicStrength(0, 0.0), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(CalibrationFactorGetters)
+{
+    auto pvt = directPvt(Pvt::DensityModel::MaoDuanYoung,
+                         Pvt::ViscosityModel::MaoDuan,
+                         Pvt::EnthalpyModel::Driesner);
+    BOOST_CHECK_EQUAL(pvt.densityFactor(0), 1.0);
+    BOOST_CHECK_EQUAL(pvt.viscosityFactor(0), 1.0);
+    pvt.setCalibrationFactors(0, 1.03, 0.95);
+    BOOST_CHECK_EQUAL(pvt.densityFactor(0), 1.03);
+    BOOST_CHECK_EQUAL(pvt.viscosityFactor(0), 0.95);
 }
