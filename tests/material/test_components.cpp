@@ -669,12 +669,14 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineWithH2OClass, Scalar, Types)
 
     // Rel. diff. tolerance
     Scalar tol = 1e-2;
-    Scalar tol_enth = 3.0e-2;
+    // The NaCl brine model and seawater differ by up to 3.4% in heat capacity near 282 K
+    Scalar tol_enth = 3.5e-2;
 
     // Extrapolation
     bool extrapolate = true;
 
-    // Loop over temperature and pressure, and compare to Coolprop values in JSON file
+    // Loop over temperature and pressure, and compare to the IAPWS-08 seawater values in the
+    // JSON file (iapws package)
     for (int iS = 0; iS < numS; ++iS){
         // Get salinity from reference data (mass fraction)
         S = Evaluation(salinity_ref.get_array_item(iS).as_double());
@@ -709,16 +711,29 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(BrineWithH2OClass, Scalar, Types)
                 //     "} exceeds tolerance {"<<tol<<"} at (T, p, S) = ("<<T.value()<<", "<<p.value()<<", "<<
                 //     S.value()<<")");
 
-                // Enthalpy
-                Scalar enthalpy = BrineDyn::liquidEnthalpy(T, p, S).value();
+                // Enthalpy. The seawater values put the salt's reference state elsewhere, which
+                // shifts enthalpy by a constant at each salinity, so compare the rise in enthalpy
+                // from the lowest temperature.
+                if (iT == 0) {
+                    continue;
+                }
+                const Evaluation T0 = Evaluation(temp_ref.get_array_item(0).as_double());
+                Scalar enthalpyRise
+                    = (BrineDyn::liquidEnthalpy(T, p, S) - BrineDyn::liquidEnthalpy(T0, p, S))
+                          .value();
                 Json::JsonObject enth_ref_ax1 = enthalpy_ref.get_array_item(iS);
-                Json::JsonObject enth_ref_ax2 = enth_ref_ax1.get_array_item(iT);
-                Scalar enth_ref = Scalar(enth_ref_ax2.get_array_item(iP).as_double());
+                Scalar enth_ref
+                    = Scalar(enth_ref_ax1.get_array_item(iT).get_array_item(iP).as_double());
+                Scalar enth_ref0
+                    = Scalar(enth_ref_ax1.get_array_item(0).get_array_item(iP).as_double());
+                Scalar enthalpyRise_ref = enth_ref - enth_ref0;
 
-                BOOST_CHECK_MESSAGE(close_at_tolerance(enthalpy, enth_ref, tol_enth),
-                    "relative difference between enthalpy {"<<enthalpy<<"} and reference {"<<enth_ref<<
-                    "} exceeds tolerance {"<<tol_enth<<"} at (T, p, S) = ("<<T.value()<<", "<<p.value()<<", "<<
-                    S.value()<<")");
+                BOOST_CHECK_MESSAGE(close_at_tolerance(enthalpyRise, enthalpyRise_ref, tol_enth),
+                                    "relative difference between enthalpy rise {"
+                                        << enthalpyRise << "} and reference {" << enthalpyRise_ref
+                                        << "} exceeds tolerance {" << tol_enth
+                                        << "} at (T, p, S) = (" << T.value() << ", " << p.value()
+                                        << ", " << S.value() << ")");
             }
         }
     }

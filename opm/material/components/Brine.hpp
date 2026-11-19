@@ -164,13 +164,16 @@ public:
             2.63500e-1, 7.48368e-6, 1.44611e-6, -3.80860e-10
         };
 
-        // Numerical coefficents from Michaelides for the enthalpy of brine
+        // Numerical coefficents from Michaelides for the enthalpy of brine; a00 is +9633.6
+        // in Michaelides (1981), eq. 7, as in the other copies of this table
+        // clang-format off
         static constexpr Scalar a[4][3] = {
-            { -9633.6, -4080.0, +286.49 },
+            { +9633.6, -4080.0, +286.49 },
             { +166.58, +68.577, -4.6856 },
             { -0.90963, -0.36524, +0.249667e-1 },
             { +0.17965e-2, +0.71924e-3, -0.4900e-4 }
         };
+        // clang-format on
 
         const Evaluation theta = temperature - 273.15;
 
