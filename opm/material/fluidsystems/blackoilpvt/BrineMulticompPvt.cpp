@@ -277,7 +277,13 @@ BrineMulticompPvt<Scalar>::computeFitRanges_(unsigned regionIdx)
             viscosity.maxIonicStrength
                 = std::min(viscosity.maxIonicStrength, r.maxMolality * ionic);
         } else if (ionic > 0.0) {
-            const auto r = Brine::laliberteViscosityRange(electrolyte);
+            auto r = Brine::laliberteViscosityRange(electrolyte);
+            if (electrolyte == Electrolyte::MgCl2) {
+                // Checked against Magomedov and Alkhasov (2007), 75 to 200 C and to 100 MPa,
+                // with the Mao and Duan water viscosity carrying pressure
+                r.maxT = 200.0 + 273.15;
+                viscosity.maxPressure = std::min(viscosity.maxPressure, Scalar {100e6});
+            }
             const Scalar w = r.maxMassFraction;
             const Scalar maxMolality
                 = w / ((1.0 - w) * SaltElectrolytes<Scalar>::molarMass(electrolyte));
