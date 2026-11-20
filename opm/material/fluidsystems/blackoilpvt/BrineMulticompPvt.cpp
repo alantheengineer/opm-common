@@ -271,6 +271,17 @@ void
 BrineMulticompPvt<Scalar>::initEnd()
 {
     using Electrolytes = SaltElectrolytes<Scalar>;
+
+    // 0 to 300 C in 0.5 K and 1 to 1000 bar in about 10 bar: within 3e-6 relative of IAPWS-97
+    UniformTabulated2DFunction<Scalar> water(273.15, 573.15, 601, 1e5, 1e8, 100);
+    for (unsigned i = 0; i < water.numX(); ++i) {
+        for (unsigned j = 0; j < water.numY(); ++j) {
+            water.setSamplePoint(
+                i, j, H2O::liquidDensity(water.iToX(i), water.jToY(j), /*extrapolate=*/true));
+        }
+    }
+    waterDensityTable_ = std::move(water);
+
     for (std::size_t regionIdx = 0; regionIdx < salinity_.size(); ++regionIdx) {
         const Scalar total = salinity_[regionIdx].sum();
         saltMassFraction_[regionIdx] = total;
@@ -430,7 +441,8 @@ BrineMulticompPvt<Scalar>::operator==(const BrineMulticompPvt& data) const
         && enableSaltConcentration_ == data.enableSaltConcentration_
         && referenceTemperature_ == data.referenceTemperature_
         && referencePressure_ == data.referencePressure_ && fitRanges_ == data.fitRanges_
-        && clampToFitRange_ == data.clampToFitRange_;
+        && clampToFitRange_ == data.clampToFitRange_
+        && waterDensityTable_ == data.waterDensityTable_;
 }
 
 template class BrineMulticompPvt<double>;

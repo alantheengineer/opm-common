@@ -28,6 +28,7 @@
 #include <opm/common/utility/SaltElectrolytes.hpp>
 
 #include <opm/material/common/Tabulated1DFunction.hpp>
+#include <opm/material/common/UniformTabulated2DFunction.hpp>
 #include <opm/material/components/BrineDynamic.hpp>
 #include <opm/material/components/H2O.hpp>
 #include <opm/material/fluidsystems/BlackOilFunctions.hpp>
@@ -35,6 +36,7 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -55,6 +57,9 @@ class Schedule;
  *
  * Ions are paired into electrolytes once per region. Pairing scales with the total salt, so
  * each call only scales the stored electrolyte fractions, with no heap allocation.
+ *
+ * The IAPWS-97 water density under the brine models comes from a table over 0 to 300 C and
+ * 1 to 1000 bar, built by initEnd(), and is evaluated directly outside it.
  *
  * In TRACER mode a cell can carry its own electrolyte fractions, built by cellFractions()
  * from the ion tracers. Calls given those fractions use them; the rest use the region's.
@@ -406,8 +411,9 @@ public:
             = BlackOil::template getSaltConcentration_<FluidState, LhsEval>(fluidState, regionIdx);
         const auto salts = electrolytes(
             regionIdx, saltConcentration, BlackOil::getBrineComposition_(fluidState));
-        return {calibratedDensity_(regionIdx, T, p, salts) / waterReferenceDensity(regionIdx),
-                calibratedViscosity_(regionIdx, T, p, salts)};
+        const auto [density, viscosity] = densityAndViscosity_(regionIdx, T, p, salts);
+        return {densityFactor(regionIdx, T) * density / waterReferenceDensity(regionIdx),
+                viscosityFactor(regionIdx, T) * viscosity};
     }
 
     template <class Evaluation>
@@ -527,11 +533,11 @@ private:
     {
         if (clampToFitRange_) {
             const auto& r = fitRange(regionIdx, FitProperty::Density);
-            return densityAt_(clamp_(temperature, r.minTemperature, r.maxTemperature),
-                              clamp_(pressure, Scalar {0.0}, r.maxPressure),
-                              salts);
+            const Evaluation T = clamp_(temperature, r.minTemperature, r.maxTemperature);
+            const Evaluation p = clamp_(pressure, Scalar {0.0}, r.maxPressure);
+            return densityAt_(T, p, salts, waterDensity_(T, p));
         }
-        return densityAt_(temperature, pressure, salts);
+        return densityAt_(temperature, pressure, salts, waterDensity_(temperature, pressure));
     }
 
     template <class Evaluation>
@@ -542,39 +548,70 @@ private:
     {
         if (clampToFitRange_) {
             const auto& r = fitRange(regionIdx, FitProperty::Viscosity);
-            return viscosityAt_(clamp_(temperature, r.minTemperature, r.maxTemperature),
-                                clamp_(pressure, Scalar {0.0}, r.maxPressure),
-                                salts);
+            const Evaluation T = clamp_(temperature, r.minTemperature, r.maxTemperature);
+            const Evaluation p = clamp_(pressure, Scalar {0.0}, r.maxPressure);
+            return viscosityAt_(T, salts, waterDensity_(T, p));
         }
-        return viscosityAt_(temperature, pressure, salts);
+        return viscosityAt_(temperature, salts, waterDensity_(temperature, pressure));
+    }
+
+    // Both from one water density; clamping uses a range per property, so not shared then
+    template <class Evaluation>
+    std::pair<Evaluation, Evaluation>
+    densityAndViscosity_(unsigned regionIdx,
+                         const Evaluation& temperature,
+                         const Evaluation& pressure,
+                         const ElectrolyteList<Evaluation>& salts) const
+    {
+        if (clampToFitRange_) {
+            return {density_(regionIdx, temperature, pressure, salts),
+                    viscosity_(regionIdx, temperature, pressure, salts)};
+        }
+        const Evaluation rhoW = waterDensity_(temperature, pressure);
+        return {densityAt_(temperature, pressure, salts, rhoW),
+                viscosityAt_(temperature, salts, rhoW)};
+    }
+
+    // IAPWS-97 water density, extended below the vapour pressure; from the table set up by
+    // initEnd() where it covers the state
+    template <class Evaluation>
+    Evaluation waterDensity_(const Evaluation& temperature, const Evaluation& pressure) const
+    {
+        if (waterDensityTable_ && waterDensityTable_->applies(temperature, pressure)) {
+            return waterDensityTable_->eval(temperature, pressure, /*extrapolate=*/true);
+        }
+        return H2O::liquidDensity(temperature, pressure, /*extrapolate=*/true);
     }
 
     template <class Evaluation>
     Evaluation densityAt_(const Evaluation& temperature,
                           const Evaluation& pressure,
-                          const ElectrolyteList<Evaluation>& salts) const
+                          const ElectrolyteList<Evaluation>& salts,
+                          const Evaluation& rhoW) const
     {
         if (densityModel_ == DensityModel::MaoDuanYoung) {
-            return Brine::liquidDensityMaoDuan(temperature, pressure, salts);
+            return Brine::liquidDensityMaoDuan(temperature, pressure, salts, rhoW);
         }
-        const Evaluation rhoW = laliberteCooperWater_
+        const Evaluation rhoPure = laliberteCooperWater_
             ? Brine::liquidDensityPureWaterLaliberteCooper(temperature)
-            : H2O::liquidDensity(temperature, pressure, /*extrapolate=*/true);
+            : rhoW;
         if (salts.empty()) {
-            return rhoW;
+            return rhoPure;
         }
-        return Brine::liquidDensityLaliberteCooper(temperature, salts, rhoW);
+        return Brine::liquidDensityLaliberteCooper(temperature, salts, rhoPure);
     }
 
     template <class Evaluation>
     Evaluation viscosityAt_(const Evaluation& temperature,
-                            const Evaluation& pressure,
-                            const ElectrolyteList<Evaluation>& salts) const
+                            const ElectrolyteList<Evaluation>& salts,
+                            const Evaluation& rhoW) const
     {
         if (viscosityModel_ == ViscosityModel::MaoDuan) {
-            return Brine::liquidViscosityMaoDuan(temperature, pressure, salts);
+            return Brine::liquidViscosityMaoDuan(temperature, salts, rhoW);
         }
-        return Brine::liquidViscosityLaliberte(temperature, pressure, salts);
+        const Evaluation p0 = Brine::laliberteReferencePressure(temperature);
+        return Brine::liquidViscosityLaliberte(
+            temperature, salts, rhoW, waterDensity_(temperature, p0));
     }
 
     // Per region: electrolyte mass fractions per unit salt mass fraction
@@ -587,6 +624,7 @@ private:
     std::vector<Scalar> surfaceDensityFactor_ {};
     std::vector<TabulatedOneDFunction> internalEnergyCurves_ {};
     std::vector<std::array<FitRange, 2>> fitRanges_ {};
+    std::optional<UniformTabulated2DFunction<Scalar>> waterDensityTable_ {};
 
     DensityModel densityModel_ {DensityModel::MaoDuanYoung};
     ViscosityModel viscosityModel_ {ViscosityModel::MaoDuan};

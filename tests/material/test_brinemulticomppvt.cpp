@@ -42,6 +42,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -57,6 +58,8 @@ constexpr double tRef = 288.71;
 constexpr double pRef = 1.01325e5;
 constexpr double tRes = 360.0;
 constexpr double pRes = 3.0e7;
+// Percent; the PVT takes water density from a table within 3e-6 of IAPWS-97
+constexpr double tableTol = 1e-3;
 
 std::string
 deckWith(const std::string& saltmc, const std::string& props)
@@ -167,20 +170,20 @@ BOOST_AUTO_TEST_CASE(BasinPreset)
     for (unsigned r = 0; r < 2; ++r) {
         const auto& salinity = config.saltComponents(r);
         const double rhoRef = Brine::liquidDensityMaoDuan(tRef, pRef, salinity);
-        BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(r), rhoRef, 1e-10);
+        BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(r), rhoRef, tableTol);
 
         // Total salt from BRINE: the SALINITC total and twice that
         for (const double factor : {1.0, 2.0}) {
             const double total = factor * salinity.sum();
             const double c = total * rhoRef;
             const auto brine = scaled(salinity, total);
-            BOOST_CHECK_CLOSE(pvt.saltMassFraction(r, c), total, 1e-10);
+            BOOST_CHECK_CLOSE(pvt.saltMassFraction(r, c), total, tableTol);
 
             const double b = pvt.inverseFormationVolumeFactor(r, tRes, pRes, 0.0, c);
-            BOOST_CHECK_CLOSE(b * rhoRef, Brine::liquidDensityMaoDuan(tRes, pRes, brine), 1e-8);
+            BOOST_CHECK_CLOSE(b * rhoRef, Brine::liquidDensityMaoDuan(tRes, pRes, brine), tableTol);
 
             const double mu = pvt.viscosity(r, tRes, pRes, 0.0, c);
-            BOOST_CHECK_CLOSE(mu, Brine::liquidViscosityMaoDuan(tRes, pRes, brine), 1e-8);
+            BOOST_CHECK_CLOSE(mu, Brine::liquidViscosityMaoDuan(tRes, pRes, brine), tableTol);
         }
     }
 }
@@ -197,21 +200,23 @@ BOOST_AUTO_TEST_CASE(SalarPreset)
 
     const auto& salinity = setup.eclState.getCo2StoreConfig().saltComponents(1);
     const double rhoRef = Brine::liquidDensityMulticompSalt(tRef, pRef, salinity, true, true);
-    BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(1), rhoRef, 1e-10);
+    BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(1), rhoRef, tableTol);
 
     const double c = salinity.sum() * rhoRef;
     const double b = pvt.inverseFormationVolumeFactor(1, tRes, pRes, 0.0, c);
     BOOST_CHECK_CLOSE(
-        b * rhoRef, Brine::liquidDensityMulticompSalt(tRes, pRes, salinity, true, true), 1e-8);
+        b * rhoRef, Brine::liquidDensityMulticompSalt(tRes, pRes, salinity, true, true), tableTol);
 
     // Laliberte viscosity takes pressure through pure water
     const double mu = pvt.viscosity(1, tRes, pRes, 0.0, c);
-    BOOST_CHECK_CLOSE(
-        mu, Brine::liquidViscosityMulticompSalt(tRes, salinity) * ratioToWater(tRes, pRes), 1e-8);
+    BOOST_CHECK_CLOSE(mu,
+                      Brine::liquidViscosityMulticompSalt(tRes, salinity)
+                          * ratioToWater(tRes, pRes),
+                      tableTol);
     BOOST_CHECK(mu > Brine::liquidViscosityMulticompSalt(tRes, salinity));
     BOOST_CHECK_CLOSE(pvt.viscosity(1, tRes, 1e5, 0.0, c),
                       Brine::liquidViscosityMulticompSalt(tRes, salinity),
-                      1e-8);
+                      tableTol);
 }
 
 BOOST_AUTO_TEST_CASE(LaliberteCooperWater)
@@ -252,8 +257,9 @@ BOOST_AUTO_TEST_CASE(FixedTotalSaltWithoutBrine)
     const auto& salinity = setup.eclState.getCo2StoreConfig().saltComponents(0);
     BOOST_CHECK_CLOSE(pvt.saltMassFraction(0, 0.0), salinity.sum(), 1e-12);
     const double b = pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, 0.0);
-    BOOST_CHECK_CLOSE(
-        b * pvt.waterReferenceDensity(0), Brine::liquidDensityMaoDuan(tRes, pRes, salinity), 1e-8);
+    BOOST_CHECK_CLOSE(b * pvt.waterReferenceDensity(0),
+                      Brine::liquidDensityMaoDuan(tRes, pRes, salinity),
+                      tableTol);
 }
 
 BOOST_AUTO_TEST_CASE(SodiumChlorideWithoutSalinitc)
@@ -263,7 +269,7 @@ BOOST_AUTO_TEST_CASE(SodiumChlorideWithoutSalinitc)
     const auto& pvt = brinePvt(multiplexer, setup);
 
     const double rhoW = H2O::liquidDensity(tRef, pRef, true);
-    BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(0), rhoW, 1e-8);
+    BOOST_CHECK_CLOSE(pvt.waterReferenceDensity(0), rhoW, tableTol);
 
     // Salt from BRINE counts as NaCl
     const double c = 60.0;
@@ -275,7 +281,7 @@ BOOST_AUTO_TEST_CASE(SodiumChlorideWithoutSalinitc)
     nacl[SaltIndex::CL] = w * mmCl / (mmNa + mmCl);
     BOOST_CHECK_CLOSE(pvt.inverseFormationVolumeFactor(0, tRes, pRes, 0.0, c) * rhoW,
                       Brine::liquidDensityMaoDuan(tRes, pRes, nacl),
-                      1e-8);
+                      tableTol);
 }
 
 BOOST_AUTO_TEST_CASE(SaltDerivatives)
@@ -348,7 +354,7 @@ BOOST_AUTO_TEST_CASE(InternalEnergy)
                 ? Brine::liquidEnthalpyLaliberteDriesner(T, pRes, brine)
                 : Brine::liquidEnthalpyLaliberte(T, pRes, brine);
             const double rho = Brine::liquidDensityMaoDuan(T, pRes, brine);
-            BOOST_CHECK_CLOSE(pvt.internalEnergy(0, T, pRes, 0.0, c), h - pRes / rho, 1e-8);
+            BOOST_CHECK_CLOSE(pvt.internalEnergy(0, T, pRes, 0.0, c), h - pRes / rho, tableTol);
         }
     }
 
@@ -450,6 +456,80 @@ BOOST_AUTO_TEST_CASE(CellCompositionMatchesRegion)
     const auto [bRegion, muRegion] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 1);
     BOOST_CHECK_EQUAL(bRegion, pvt.inverseFormationVolumeFactor(1, tRes, pRes, 0.0, c));
     BOOST_CHECK_EQUAL(muRegion, pvt.viscosity(1, tRes, pRes, 0.0, c));
+}
+
+BOOST_AUTO_TEST_CASE(DensityAndViscosityShareWaterDensity)
+{
+    // The fluid state path computes water density once for both properties; it must give
+    // the same values as the separate calls, which compute it each
+    using DM = Pvt::DensityModel;
+    using VM = Pvt::ViscosityModel;
+    const double c = 150.0;
+    for (const auto density : {DM::MaoDuanYoung, DM::LaliberteCooper}) {
+        for (const auto viscosity : {VM::MaoDuan, VM::Laliberte}) {
+            auto pvt = directPvt(density, viscosity, Pvt::EnthalpyModel::Driesner);
+            for (const bool clamp : {false, true}) {
+                pvt.setClampToFitRange(clamp);
+                for (const double T : {290.0, 340.0, 420.0}) {
+                    for (const double p : {2e6, 25e6}) {
+                        const CellFluidState<double> fs {T, p, c};
+                        const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 0);
+                        BOOST_CHECK_EQUAL(b, pvt.inverseFormationVolumeFactor(0, T, p, 0.0, c));
+                        BOOST_CHECK_EQUAL(mu, pvt.viscosity(0, T, p, 0.0, c));
+                    }
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(TabulatedWaterDensity)
+{
+    // Water density comes from a table after initEnd(); the brine properties must stay close
+    // to those from IAPWS-97 evaluated directly, and match them outside the table
+    using DM = Pvt::DensityModel;
+    using VM = Pvt::ViscosityModel;
+    using Eval = Opm::DenseAd::Evaluation<double, 2>;
+    const double c = 150.0;
+    for (const auto density : {DM::MaoDuanYoung, DM::LaliberteCooper}) {
+        for (const auto viscosity : {VM::MaoDuan, VM::Laliberte}) {
+            const auto pvt = directPvt(density, viscosity, Pvt::EnthalpyModel::Driesner);
+            const auto direct = [&](const Eval& T, const Eval& p) {
+                const auto salts = pvt.electrolytes(0, Eval(c));
+                const Eval rho = density == DM::MaoDuanYoung
+                    ? Pvt::Brine::liquidDensityMaoDuan(T, p, salts)
+                    : Pvt::Brine::liquidDensityLaliberteCooper(
+                          T, salts, Pvt::H2O::liquidDensity(T, p, true));
+                const Eval mu = viscosity == VM::MaoDuan
+                    ? Pvt::Brine::liquidViscosityMaoDuan(T, p, salts)
+                    : Pvt::Brine::liquidViscosityLaliberte(T, p, salts);
+                return std::pair {rho / pvt.waterReferenceDensity(0), mu};
+            };
+            for (double t = 285.0; t < 520.0; t += 13.7) {
+                for (double pres = 1.5e6; pres < 9e7; pres += 7.3e6) {
+                    const Eval T(t, 0);
+                    const Eval p(pres, 1);
+                    const CellFluidState<Eval> fs {T, p, Eval(c)};
+                    const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 0);
+                    const auto [bRef, muRef] = direct(T, p);
+                    BOOST_CHECK_CLOSE(b.value(), bRef.value(), tableTol);
+                    BOOST_CHECK_CLOSE(mu.value(), muRef.value(), tableTol);
+                    BOOST_CHECK_CLOSE(b.derivative(1), bRef.derivative(1), 1.0);
+                    BOOST_CHECK_SMALL(b.derivative(0) - bRef.derivative(0), 1e-5);
+                    BOOST_CHECK_CLOSE(mu.derivative(0), muRef.derivative(0), 1.0);
+                }
+            }
+
+            // Above the table's 300 C the water density is evaluated directly
+            const Eval T(590.0, 0);
+            const Eval p(2e7, 1);
+            const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(
+                CellFluidState<Eval> {T, p, Eval(c)}, 0);
+            const auto [bRef, muRef] = direct(T, p);
+            BOOST_CHECK_EQUAL(b.value(), bRef.value());
+            BOOST_CHECK_EQUAL(mu.value(), muRef.value());
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(CellCompositionOwnRatios)
