@@ -452,6 +452,31 @@ BOOST_AUTO_TEST_CASE(CellCompositionMatchesRegion)
     BOOST_CHECK_EQUAL(muRegion, pvt.viscosity(1, tRes, pRes, 0.0, c));
 }
 
+BOOST_AUTO_TEST_CASE(DensityAndViscosityShareWaterDensity)
+{
+    // The fluid state path computes water density once for both properties; it must give
+    // the same values as the separate calls, which compute it each
+    using DM = Pvt::DensityModel;
+    using VM = Pvt::ViscosityModel;
+    const double c = 150.0;
+    for (const auto density : {DM::MaoDuanYoung, DM::LaliberteCooper}) {
+        for (const auto viscosity : {VM::MaoDuan, VM::Laliberte}) {
+            auto pvt = directPvt(density, viscosity, Pvt::EnthalpyModel::Driesner);
+            for (const bool clamp : {false, true}) {
+                pvt.setClampToFitRange(clamp);
+                for (const double T : {290.0, 340.0, 420.0}) {
+                    for (const double p : {2e6, 25e6}) {
+                        const CellFluidState<double> fs {T, p, c};
+                        const auto [b, mu] = pvt.inverseFormationVolumeFactorAndViscosity(fs, 0);
+                        BOOST_CHECK_EQUAL(b, pvt.inverseFormationVolumeFactor(0, T, p, 0.0, c));
+                        BOOST_CHECK_EQUAL(mu, pvt.viscosity(0, T, p, 0.0, c));
+                    }
+                }
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(CellCompositionOwnRatios)
 {
     const Setup setup(deckWith("", salinitc));

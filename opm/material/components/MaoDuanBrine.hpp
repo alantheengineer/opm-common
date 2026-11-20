@@ -163,7 +163,21 @@ public:
     template <class Evaluation>
     static Evaluation waterViscosity(const Evaluation& temperature, const Evaluation& pressure)
     {
-        const Evaluation rho = waterDensity(temperature, pressure) * 1e-3; // g/cm3
+        return waterViscosityFromDensity(temperature, waterDensity(temperature, pressure));
+    }
+
+    /*!
+     * Viscosity of water as waterViscosity(), from a given water density
+     *
+     * @param temperature Temperature [K]
+     * @param rhoW Water density [kg/m3]
+     * @return Viscosity [Pa s]
+     */
+    template <class Evaluation>
+    static Evaluation waterViscosityFromDensity(const Evaluation& temperature,
+                                                const Evaluation& rhoW)
+    {
+        const Evaluation rho = rhoW * 1e-3; // g/cm3
         const Evaluation& T = temperature;
         const Evaluation lnMu = d_[0] / (T * T) + d_[1] / T + d_[2] + d_[3] * T + d_[4] * T * T
             + rho * (d_[5] / (T * T) + d_[6] / T + d_[7] + d_[8] * T + d_[9] * T * T);

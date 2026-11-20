@@ -35,6 +35,7 @@
 #include <opm/material/components/Component.hpp>
 #include <opm/material/components/LaliberteHeatCapacity.hpp>
 #include <opm/material/components/MaoDuanBrine.hpp>
+#include <opm/material/components/iapws/Common.hpp>
 
 #include <array>
 #include <cassert>
@@ -648,17 +649,48 @@ public:
                                                const Evaluation& pressure,
                                                const ElectrolyteList<Evaluation>& electrolytes)
     {
-        const Evaluation muW = liquidViscosityPureWaterLaliberte_(temperature);
-        const Evaluation mu = electrolytes.empty()
-            ? muW * 1e-3
-            : liquidViscosityLaliberte(temperature, electrolytes, muW);
+        const Evaluation p0 = laliberteReferencePressure(temperature);
+        return liquidViscosityLaliberteAtP0_(temperature, electrolytes)
+            * H2O::liquidViscosity(temperature, pressure, /*extrapolate=*/true)
+            / H2O::liquidViscosity(temperature, p0, /*extrapolate=*/true);
+    }
 
+    /*!
+     * The pressure p0 of the Laliberte viscosity above: the larger of 0.1 MPa and the
+     * vapour pressure
+     *
+     * @param temperature Temperature [K]
+     * @return Pressure [Pa]
+     */
+    template <class Evaluation>
+    static Evaluation laliberteReferencePressure(const Evaluation& temperature)
+    {
         Evaluation p0 = H2O::vaporPressure(temperature);
         if (p0 < 1e5) {
             p0 = 1e5;
         }
-        return mu * H2O::liquidViscosity(temperature, pressure, /*extrapolate=*/true)
-            / H2O::liquidViscosity(temperature, p0, /*extrapolate=*/true);
+        return p0;
+    }
+
+    /*!
+     * Laliberte (2007) viscosity with pressure taken through pure water, as above, with the
+     * IAPWS-97 water viscosity from given densities
+     *
+     * @param temperature Temperature [K]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @param rhoW Water density at the pressure [kg/m3]
+     * @param rhoW0 Water density at laliberteReferencePressure() [kg/m3]
+     * @return Viscosity of brine [Pa*s]
+     */
+    template <class Evaluation>
+    static Evaluation liquidViscosityLaliberte(const Evaluation& temperature,
+                                               const ElectrolyteList<Evaluation>& electrolytes,
+                                               const Evaluation& rhoW,
+                                               const Evaluation& rhoW0)
+    {
+        using Common = IAPWS::Common<Scalar>;
+        return liquidViscosityLaliberteAtP0_(temperature, electrolytes)
+            * Common::viscosity(temperature, rhoW) / Common::viscosity(temperature, rhoW0);
     }
 
     /*!
@@ -968,10 +1000,30 @@ public:
                                            const Evaluation& pressure,
                                            const ElectrolyteList<Evaluation>& electrolytes)
     {
+        return liquidDensityMaoDuan(temperature,
+                                    pressure,
+                                    electrolytes,
+                                    MaoDuanBrine<Scalar>::waterDensity(temperature, pressure));
+    }
+
+    /*!
+     * Density of a basin brine as above, from a given IAPWS-97 water density
+     *
+     * @param temperature Temperature [K]
+     * @param pressure Pressure [Pa]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @param rhoW Water density at the temperature and pressure [kg/m3]
+     * @return Brine density [kg/m3]
+     */
+    template <class Evaluation>
+    static Evaluation liquidDensityMaoDuan(const Evaluation& temperature,
+                                           const Evaluation& pressure,
+                                           const ElectrolyteList<Evaluation>& electrolytes,
+                                           const Evaluation& rhoW)
+    {
         using MaoDuan = MaoDuanBrine<Scalar>;
         using Electrolytes = SaltElectrolytes<Scalar>;
         const Evaluation sumW = soluteMassFraction_(electrolytes);
-        const Evaluation rhoW = MaoDuan::waterDensity(temperature, pressure);
 
         Evaluation ionicStrength = 0.0;
         for (const auto& salt : electrolytes) {
@@ -1036,9 +1088,26 @@ public:
                                              const Evaluation& pressure,
                                              const ElectrolyteList<Evaluation>& electrolytes)
     {
+        return liquidViscosityMaoDuan(
+            temperature, electrolytes, MaoDuanBrine<Scalar>::waterDensity(temperature, pressure));
+    }
+
+    /*!
+     * Viscosity of a basin brine as above, from a given IAPWS-97 water density
+     *
+     * @param temperature Temperature [K]
+     * @param electrolytes Electrolytes and their mass fractions in the brine
+     * @param rhoW Water density at the temperature and pressure [kg/m3]
+     * @return Viscosity of brine [Pa s]
+     */
+    template <class Evaluation>
+    static Evaluation liquidViscosityMaoDuan(const Evaluation& temperature,
+                                             const ElectrolyteList<Evaluation>& electrolytes,
+                                             const Evaluation& rhoW)
+    {
         using MaoDuan = MaoDuanBrine<Scalar>;
         const Evaluation sumW = soluteMassFraction_(electrolytes);
-        const Evaluation muW = MaoDuan::waterViscosity(temperature, pressure);
+        const Evaluation muW = MaoDuan::waterViscosityFromDensity(temperature, rhoW);
 
         Evaluation ionicStrength = 0.0;
         for (const auto& salt : electrolytes) {
@@ -1390,6 +1459,16 @@ private:
     {
         const auto tempC = temperature - 273.15;
         return (tempC + 246.0) / ((0.05594 * tempC + 5.2842) * tempC + 137.37);
+    }
+
+    // Laliberte viscosity with the Laliberte water viscosity, before the pressure correction
+    template <class Evaluation>
+    static Evaluation liquidViscosityLaliberteAtP0_(const Evaluation& temperature,
+                                                    const ElectrolyteList<Evaluation>& electrolytes)
+    {
+        const Evaluation muW = liquidViscosityPureWaterLaliberte_(temperature);
+        return electrolytes.empty() ? muW * 1e-3
+                                    : liquidViscosityLaliberte(temperature, electrolytes, muW);
     }
 
     /*!
