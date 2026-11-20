@@ -33,6 +33,8 @@
 #include <opm/material/binarycoefficients/Brine_H2.hpp>
 #include <opm/material/common/UniformTabulated2DFunction.hpp>
 
+#include <opm/material/fluidsystems/blackoilpvt/BrineSalinity.hpp>
+
 #include <cstddef>
 #include <vector>
 
@@ -248,8 +250,7 @@ public:
                                                 const Evaluation& pressure,
                                                 const Evaluation& saltConcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(temperature, pressure,
-                                                              saltConcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltConcentration);
         return rvwSat_(regionIdx, temperature, pressure, salinity);
      }
 
@@ -358,10 +359,9 @@ private:
     }
 
     template <class LhsEval>
-    const LhsEval salinityFromConcentration(const LhsEval&T, const LhsEval& P,
-                                            const LhsEval& saltConcentration) const
+    LhsEval salinityFromConcentration(unsigned regionIdx, const LhsEval& saltConcentration) const
     {
-        return saltConcentration / H2O::liquidDensity(T, P, true);
+        return BrineSalinity::massFraction(saltConcentration, brineReferenceDensity_[regionIdx]);
     }
 
     std::vector<Scalar> gasReferenceDensity_{};

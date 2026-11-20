@@ -1548,6 +1548,7 @@ list(APPEND PUBLIC_HEADER_FILES
   opm/material/fluidsystems/blackoilpvt/BrineCo2Pvt.hpp
   opm/material/fluidsystems/blackoilpvt/BrineH2Pvt.hpp
   opm/material/fluidsystems/blackoilpvt/BrineMulticompPvt.hpp
+  opm/material/fluidsystems/blackoilpvt/BrineSalinity.hpp
   opm/material/fluidsystems/blackoilpvt/Co2GasPvt.hpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityBrinePvt.hpp
   opm/material/fluidsystems/blackoilpvt/ConstantCompressibilityOilPvt.hpp

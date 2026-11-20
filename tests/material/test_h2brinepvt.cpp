@@ -285,3 +285,34 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(Water, Scalar, Types) {
     ensurePvtApiGas<Scalar>(h2Pvt);
     ensurePvtApiBrine<Eval>(brinePvt);
 }
+
+// The BRINE salt concentration of the region's own brine must give the region's salinity,
+// at any pressure and temperature
+BOOST_AUTO_TEST_CASE(SaltConcentrationGivesRegionSalinity)
+{
+    using Brine = Opm::BrineH2Pvt<double>;
+    using Gas = Opm::H2GasPvt<double>;
+    const std::vector<double> salinity {0.1};
+
+    const Brine fixed(salinity);
+    Brine transported(salinity);
+    transported.setEnableSaltConcentration(true);
+    const double c = salinity[0] * transported.waterReferenceDensity(0);
+
+    Gas gas(salinity);
+    gas.setEnableVaporizationWater(true);
+
+    for (const double T : {300.0, 360.0}) {
+        for (const double p : {1.0e7, 3.0e7}) {
+            BOOST_CHECK_CLOSE(transported.saturatedInverseFormationVolumeFactor(0, T, p, c),
+                              fixed.saturatedInverseFormationVolumeFactor(0, T, p, c),
+                              1e-9);
+            BOOST_CHECK_CLOSE(transported.saturatedViscosity(0, T, p, c),
+                              fixed.saturatedViscosity(0, T, p, c),
+                              1e-9);
+            BOOST_CHECK_CLOSE(gas.saturatedWaterVaporizationFactor(0, T, p, c),
+                              gas.saturatedWaterVaporizationFactor(0, T, p),
+                              1e-9);
+        }
+    }
+}

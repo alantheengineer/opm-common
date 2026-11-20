@@ -46,6 +46,8 @@
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
 #include <opm/input/eclipse/EclipseState/Tables/TableManager.hpp>
 
+#include <opm/material/fluidsystems/blackoilpvt/BrineSalinity.hpp>
+
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -337,10 +339,7 @@ public:
                                                                 const Evaluation& saltConcentration) const
     {
         OPM_TIMEFUNCTION_LOCAL(Subsystem::PvtProps);
-        const auto salinity =
-            salinityFromConcentration(temperature,
-                                      pressure,
-                                      saltConcentration);
+        const auto salinity = salinityFromConcentration(regionIdx, saltConcentration);
         return rvwSat_(regionIdx, temperature, pressure, salinity);
     }
 
@@ -535,18 +534,10 @@ private:
 
     template <class LhsEval>
     OPM_HOST_DEVICE SaltArray<LhsEval, SaltMassFraction>
-    salinityFromConcentration(const LhsEval& T,
-                              const LhsEval& P,
-                              const LhsEval& saltConcentration) const
+    salinityFromConcentration(unsigned regionIdx, const LhsEval& saltConcentration) const
     {
-        const LhsEval salt = saltConcentration / H2O::liquidDensity(T, P, true);
-        const Scalar NaMolarMass = saltMolarMass<Scalar>(SaltIndex::NA);
-        const Scalar ClMolarMass = saltMolarMass<Scalar>(SaltIndex::CL);
-        const Scalar NaClMolarMass = NaMolarMass + ClMolarMass;
-        SaltArray<LhsEval, SaltMassFraction> S;
-        S[SaltIndex::NA] = salt * NaMolarMass / NaClMolarMass;
-        S[SaltIndex::CL] = salt * ClMolarMass / NaClMolarMass;
-        return S;
+        return BrineSalinity::massFractions(
+            saltConcentration, brineReferenceDensity_[regionIdx], salinity_[regionIdx]);
     }
 
     ContainerT brineReferenceDensity_{};

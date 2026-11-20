@@ -37,6 +37,8 @@ copyright holders.
 #include <opm/material/common/Valgrind.hpp>
 #include <opm/material/fluidsystems/BlackOilFunctions.hpp>
 
+#include <opm/material/fluidsystems/blackoilpvt/BrineSalinity.hpp>
+
 #include <cstddef>
 #include <vector>
 
@@ -130,8 +132,7 @@ public:
                         const Evaluation& Rs,
                         const Evaluation& saltConcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(regionIdx, temperature,
-                                                              pressure, saltConcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltConcentration);
         const Evaluation xlH2 = convertRsToXoG_(Rs,regionIdx);
         return liquidEnthalpyBrineH2_(temperature,
                                       pressure,
@@ -180,8 +181,7 @@ public:
                                  const Evaluation& pressure,
                                  const Evaluation& saltConcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(regionIdx, temperature,
-                                                              pressure, saltConcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltConcentration);
         return Brine::liquidViscosity(temperature, pressure, salinity);
     }
 
@@ -219,8 +219,7 @@ public:
                                                      const Evaluation& pressure,
                                                      const Evaluation& saltconcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(regionIdx, temperature,
-                                                              pressure, saltconcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltconcentration);
         Evaluation rsSat = rsSat_(regionIdx, temperature, pressure, salinity);
         return (1.0 - convertRsToXoG_(rsSat,regionIdx))
              * density_(regionIdx, temperature, pressure, rsSat, salinity)
@@ -237,8 +236,7 @@ public:
                                             const Evaluation& Rs,
                                             const Evaluation& saltConcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(regionIdx, temperature,
-                                                              pressure, saltConcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltConcentration);
         return (1.0 - convertRsToXoG_(Rs,regionIdx))
              * density_(regionIdx, temperature, pressure, Rs, salinity)
              / brineReferenceDensity_[regionIdx];
@@ -350,8 +348,7 @@ public:
                                              const Evaluation& pressure,
                                              const Evaluation& saltConcentration) const
     {
-        const Evaluation salinity = salinityFromConcentration(regionIdx, temperature,
-                                                              pressure, saltConcentration);
+        const Evaluation salinity = salinityFromConcentration(regionIdx, saltConcentration);
         return rsSat_(regionIdx, temperature, pressure, salinity);
     }
 
@@ -678,21 +675,12 @@ private:
     }
 
     template <class LhsEval>
-    const LhsEval salinityFromConcentration(unsigned regionIdx,
-                                            const LhsEval&T,
-                                            const LhsEval& P,
-                                            const LhsEval& saltConcentration) const
+    LhsEval salinityFromConcentration(unsigned regionIdx, const LhsEval& saltConcentration) const
     {
         if (enableSaltConcentration_) {
-            // Convert concentration [kg/m³] to mass fraction [kg_salt/kg_solution].
-            // First approximation using pure water density
-            const LhsEval rho_w = H2O::liquidDensity(T, P, true);
-            const LhsEval S_approx = saltConcentration / rho_w;
-            // Improved estimate using Batzle-Wang brine density
-            const LhsEval rho_brine = Brine::liquidDensity(T, P, S_approx, rho_w);
-            return saltConcentration / rho_brine;
+            return BrineSalinity::massFraction(saltConcentration,
+                                               brineReferenceDensity_[regionIdx]);
         }
-
         return salinity(regionIdx);
     }
 

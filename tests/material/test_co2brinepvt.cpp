@@ -51,6 +51,7 @@
 #include <opm/input/eclipse/Schedule/Schedule.hpp>
 
 #include <iostream>
+#include <utility>
 
 // values of strings based on the first SPE1 test case of opm-data.  note that in the
 // real world it does not make much sense to specify a fluid phase using more than a
@@ -283,4 +284,49 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(Water, Scalar, Types)
     using Eval = Opm::DenseAd::Evaluation<Scalar,1>;
     ensurePvtApiGas<Scalar>(co2Pvt);
     ensurePvtApiBrine<Eval>(brinePvt);
+}
+
+// The BRINE salt concentration of the region's own brine must give the region's salinity,
+// at any pressure and temperature, and keep its ion ratios
+BOOST_AUTO_TEST_CASE(SaltConcentrationGivesRegionSalinity)
+{
+    using Brine = Opm::BrineCo2Pvt<double>;
+    using Gas = Opm::Co2GasPvt<double>;
+    using Opm::SaltIndex;
+
+    Opm::SaltArray<double, Opm::SaltMolality> nacl;
+    nacl[SaltIndex::NA] = 2.0;
+    nacl[SaltIndex::CL] = 2.0;
+    Opm::SaltArray<double, Opm::SaltMolality> mixed;
+    mixed[SaltIndex::NA] = 1.5;
+    mixed[SaltIndex::CA] = 0.3;
+    mixed[SaltIndex::CL] = 2.1;
+
+    for (const auto& [molality, multicomp] : {std::pair {nacl, false}, std::pair {mixed, true}}) {
+        const auto salinity = molality.convert_to<Opm::SaltMassFraction>();
+
+        const Opm::VectorWithDefaultAllocator<Opm::SaltArray<double, Opm::SaltMassFraction>>
+            regions {salinity};
+        const Brine fixed(regions, multicomp);
+        Brine transported(regions, multicomp);
+        transported.setEnableSaltConcentration(true);
+        const double c = salinity.sum() * transported.waterReferenceDensity(0);
+
+        Gas gas(regions, multicomp);
+        gas.setEnableVaporizationWater(true);
+
+        for (const double T : {300.0, 360.0}) {
+            for (const double p : {1.0e7, 3.0e7}) {
+                BOOST_CHECK_CLOSE(transported.saturatedInverseFormationVolumeFactor(0, T, p, c),
+                                  fixed.saturatedInverseFormationVolumeFactor(0, T, p, c),
+                                  1e-9);
+                BOOST_CHECK_CLOSE(transported.saturatedViscosity(0, T, p, c),
+                                  fixed.saturatedViscosity(0, T, p, c),
+                                  1e-9);
+                BOOST_CHECK_CLOSE(gas.saturatedWaterVaporizationFactor(0, T, p, c),
+                                  gas.saturatedWaterVaporizationFactor(0, T, p),
+                                  1e-9);
+            }
+        }
+    }
 }
